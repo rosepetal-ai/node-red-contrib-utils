@@ -1,0 +1,100 @@
+<script type="text/javascript">
+    RED.nodes.registerType('rp-promise-reader', {
+        category: 'RP Utils',
+        color: '#a6bbcf',
+        defaults: {
+            name: { value: "rp-promise-reader", validate: function(v) { return v.length > 0; }, required: false },
+            fieldToRead: { value: "promises", validate: function(v) { return v !== ""; }, required: true }
+        },
+        inputs: 1,
+        outputs: 1,
+        icon: 'font-awesome/fa-clock-o',
+        label: function() {
+            return this.name || "promise reader";
+        },
+
+        oneditprepare: function() {
+            $('#node-input-fieldToRead').typedInput({
+                type: 'msg',
+                types: ['msg']
+            });
+        }
+        
+    });
+</script>
+
+<script type="text/html" data-template-name="rp-promise-reader">
+    <div class="form-row">
+        <label for="node-input-name"><i class="fa fa-tag"></i> Name</label>
+        <input type="text" id="node-input-name" placeholder="Name">
+    </div>
+
+    <div class="form-row">
+        <label for="node-input-fieldToRead"><i class="fa fa-folder"></i> Field to read</label>
+        <input type="text" id="node-input-fieldToRead" placeholder="e.g., post.async">
+    </div>
+</script>
+
+
+
+<script type="text/html" data-help-name="rp-promise-reader">
+    <p><strong>The Promise Reader node</strong> resolves arrays of promises and aggregates their results into the message object. This node is essential for handling asynchronous operations from nodes like the inferencer, which use promise-based processing for concurrent inference requests.</p>
+
+    <h3>Purpose</h3>
+    <p>When nodes perform asynchronous operations (like sending inference requests to multiple servers), they return promises instead of immediate results. The Promise Reader collects these promises, waits for all to complete using <code>Promise.all()</code>, then merges the resolved data back into the message flow.</p>
+
+    <h3>Parameters</h3>
+    <ul>
+        <li><strong>Name:</strong> Display name for the node instance.</li>
+        <li><strong><a id="promise-field-param">Field to read</a>:</strong> Message field path containing the promise array. Defaults to <code>promises</code> (reads from <code>msg.promises</code>). Can use dot notation for nested fields like <code>inference.promises</code>.</li>
+    </ul>
+
+    <h3>Input Requirements</h3>
+    <p>The specified message field must contain an <strong>array</strong> of valid JavaScript promises</li>
+
+    <h3>Processing Behavior</h3>
+    <ol>
+        <li><strong>Promise Collection:</strong> Extracts promise array from specified message field</li>
+        <li><strong>Parallel Resolution:</strong> Uses <code>Promise.all()</code> to wait for all promises simultaneously</li>
+        <li><strong>Result Aggregation:</strong> Merges resolved data into the message object using <code>Object.assign()</code></li>
+        <li><strong>Performance Tracking:</strong> Aggregates timing information from all resolved promises</li>
+        <li><strong>Cleanup:</strong> Removes the original promise array from the message</li>
+    </ol>
+
+    <h3>Output Format</h3>
+    <p>Resolved promise data is merged directly into the message object:</p>
+    <pre>{
+  // Original message fields preserved
+  payload: {...},
+  
+  // Merged results from resolved promises
+  detections: [...],    // Inference results
+  confidence: 0.95,     // Aggregated confidence
+  
+  // Performance metrics
+  performance: {
+    "rp-promise-reader": {
+      startTime: 1640995200000,
+      endTime: 1640995201500,
+      milliseconds: 1500
+    }
+  }
+  // Original promises array removed
+}</pre>
+
+    <h3>Integration Examples</h3>
+    <ul>
+        <li><strong>After Inferencer:</strong> Use default field <code>promises</code> to resolve inference results from multiple concurrent servers</li>
+        <li><strong>Custom Async Nodes:</strong> Specify custom field paths like <code>custom.asyncResults</code> for specialized use cases</li>
+    </ul>
+
+    <h3>Error Handling</h3>
+    <ul>
+        <li><strong>Invalid Input:</strong> Warns if field doesn't contain an array and passes message unchanged</li>
+        <li><strong>Non-Promise Elements:</strong> Errors if array contains non-promise objects</li>
+        <li><strong>Promise Rejection:</strong> Logs warnings for rejected promises but continues processing others</li>
+        <li><strong>Missing Field:</strong> Warns and passes message unchanged if specified field doesn't exist</li>
+    </ul>
+
+    <p><strong>Performance Tip:</strong> This node waits for the slowest promise to complete. For optimal performance, ensure all upstream async operations have appropriate timeouts.</p>
+</script>

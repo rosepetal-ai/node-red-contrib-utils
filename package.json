@@ -1,0 +1,55 @@
+{
+  "name": "@rosepetal/node-red-contrib-utils",
+  "version": "1.1.1",
+  "description": "Utility and I/O nodes for Node-RED, including array helpers and file saving.",
+  "scripts": {
+    "test": "echo \"Error: no test specified\" && exit 1"
+  },
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/rosepetal-ai/node-red-contrib-utils.git"
+  },
+  "keywords": [
+    "node-red",
+    "utilities",
+    "array",
+    "file",
+    "image",
+    "io"
+  ],
+  "author": "Rosepetal SL (https://www.rosepetal.ai)",
+  "contributors": [
+    {
+      "name": "Nil Allue",
+      "email": "nil.allue@rosepetal.ai"
+    },
+    {
+      "name": "Víctor González Bentué",
+      "email": "victor.gonzalez@rosepetal.ai"
+    }
+  ],
+  "license": "Apache-2.0",
+  "bugs": {
+    "url": "https://github.com/rosepetal-ai/node-red-contrib-utils/issues"
+  },
+  "homepage": "https://github.com/rosepetal-ai/node-red-contrib-utils#readme",
+  "engines": {
+    "node": ">=16.0"
+  },
+  "node-red": {
+    "version": ">=1.0.0",
+    "nodes": {
+      "rp-array-in": "nodes/io/array-in.js",
+      "rp-array-out": "nodes/io/array-out.js",
+      "rp-array-select": "nodes/io/array-select.js",
+      "rp-queue": "nodes/io/queue.js",
+      "rp-save-file": "nodes/io/save-file.js",
+      "rp-clean-debug": "nodes/util/clean-debug.js",
+      "rp-block-detect": "nodes/util/block-detect.js",
+      "rp-promise-reader": "nodes/promise-reader/promise-reader.js"
+    }
+  },
+  "dependencies": {
+    "sharp": "^0.34.2"
+  }
+}

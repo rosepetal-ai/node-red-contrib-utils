@@ -1,0 +1,54 @@
+name: Publish Package
+
+on:
+  push:
+    tags:
+      - 'v*'
+  workflow_dispatch:
+    inputs:
+      publish:
+        description: 'Publish to npm'
+        required: false
+        default: 'false'
+        type: boolean
+
+env:
+  NODE_VERSION: '20'
+
+jobs:
+  publish:
+    runs-on: ubuntu-22.04
+    if: ${{ startsWith(github.ref, 'refs/tags/v') || github.event.inputs.publish == 'true' }}
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Setup Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: ${{ env.NODE_VERSION }}
+          registry-url: 'https://registry.npmjs.org'
+
+      - name: Determine npm dist-tag
+        id: dist-tag
+        run: |
+          ref_name="${GITHUB_REF_NAME}"
+          dist_tag="latest"
+          if [[ "${GITHUB_REF}" == refs/tags/v* ]]; then
+            version="${ref_name#v}"
+            if [[ "$version" == *-* ]]; then
+              pre="${version#*-}"
+              preid="${pre%%[.+]*}"
+              if [[ -n "$preid" ]]; then
+                dist_tag="$preid"
+              fi
+            fi
+          fi
+          echo "tag=$dist_tag" >> "$GITHUB_OUTPUT"
+          echo "Using dist-tag: $dist_tag"
+
+      - name: Publish package
+        env:
+          NODE_AUTH_TOKEN: ${{ secrets.NPM_TOKEN }}
+          PUBLISH_TAG: ${{ steps.dist-tag.outputs.tag }}
+        run: |
+          npm publish --access public --tag "$PUBLISH_TAG" || echo "Package may already exist"
