@@ -10,7 +10,8 @@
             timeout: { value: 0 }
         },
         inputs: 1,
-        outputs: 1,
+        outputs: 2,
+        outputLabels: ["output", "dropped"],
         icon: "font-awesome/fa-clock-o",
         label: function() {
             if (this.name) return this.name;
@@ -106,11 +107,28 @@
         <dd>Minimum time to wait between forwarded messages. Zero means send immediately when data is available.</dd>
     </dl>
 
+    <h3>Outputs</h3>
+    <dl class="message-properties">
+        <dt>Output 1 <span class="property-type">message</span></dt>
+        <dd>Successfully queued messages released according to the interval setting.</dd>
+        <dt>Output 2 <span class="property-type">message</span></dt>
+        <dd>Messages dropped due to timeout expiration or queue overflow. Includes metadata:
+            <ul>
+                <li><code>msg.meta.queueDropped</code> - Always <code>true</code></li>
+                <li><code>msg.meta.queueDropReason</code> - Either <code>"timeout"</code> or <code>"overflow"</code></li>
+                <li><code>msg.meta.queuedDuration</code> - Time in queue before timeout (timeout only)</li>
+                <li><code>msg.meta.queueTimeout</code> - Configured timeout value (timeout only)</li>
+                <li><code>msg.meta.queueSize</code> - Current queue size (overflow only)</li>
+                <li><code>msg.meta.queueMaxSize</code> - Configured max size (overflow only)</li>
+            </ul>
+        </dd>
+    </dl>
+
     <h3>Behavior</h3>
     <ul>
         <li>Messages are processed in FIFO order while respecting the selected mode.</li>
-        <li>Queue-size mode enforces a hard cap, rejecting excess messages.</li>
-        <li>Timeout mode keeps buffering but evicts stale entries before sending.</li>
+        <li>Queue-size mode enforces a hard cap; excess messages go to output 2 with <code>overflow</code> reason.</li>
+        <li>Timeout mode keeps buffering but evicts stale entries to output 2 with <code>timeout</code> reason.</li>
         <li>The interval ensures a steady pace by adding delays between sends when configured.</li>
     </ul>
 

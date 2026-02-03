@@ -68,23 +68,32 @@ module.exports = function (RED) {
       }
 
       const now = Date.now();
-      let dropped = 0;
+      const expiredEntries = [];
 
       while (state.queue.length > 0) {
         const oldest = state.queue[0];
         if (now - oldest.enqueuedAt >= node.timeoutMs) {
-          state.queue.shift();
-          dropped += 1;
+          expiredEntries.push(state.queue.shift());
         } else {
           break;
         }
       }
 
-      if (dropped > 0) {
-        node.warn(`Queue node dropped ${dropped} message(s) due to timeout.`);
+      if (expiredEntries.length > 0) {
+        node.warn(`Queue node dropped ${expiredEntries.length} message(s) due to timeout.`);
+        // Send expired messages to output 2 with metadata
+        for (const entry of expiredEntries) {
+          const droppedMsg = entry.msg;
+          droppedMsg.meta = droppedMsg.meta || {};
+          droppedMsg.meta.queueDropped = true;
+          droppedMsg.meta.queueDropReason = 'timeout';
+          droppedMsg.meta.queuedDuration = now - entry.enqueuedAt;
+          droppedMsg.meta.queueTimeout = node.timeoutMs;
+          node.send([null, droppedMsg]);
+        }
       }
 
-      return dropped;
+      return expiredEntries.length;
     }
 
     function scheduleNextSend() {
@@ -144,7 +153,7 @@ module.exports = function (RED) {
         text: `Sending (remaining ${state.queue.length})`
       });
 
-      node.send(entry.msg);
+      node.send([entry.msg, null]);
       scheduleNextSend();
     }
 
@@ -161,8 +170,15 @@ module.exports = function (RED) {
           state.queue.length >= node.maxQueueSize
         ) {
           node.warn(
-            `Queue node at capacity (${node.maxQueueSize}). Incoming message ignored.`
+            `Queue node at capacity (${node.maxQueueSize}). Incoming message dropped.`
           );
+          // Send overflow message to output 2 with metadata
+          msg.meta = msg.meta || {};
+          msg.meta.queueDropped = true;
+          msg.meta.queueDropReason = 'overflow';
+          msg.meta.queueSize = state.queue.length;
+          msg.meta.queueMaxSize = node.maxQueueSize;
+          node.send([null, msg]);
           setStatusQueued();
           return done?.();
         }

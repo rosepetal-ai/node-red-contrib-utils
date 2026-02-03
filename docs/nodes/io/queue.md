@@ -16,9 +16,14 @@ The `queue` node buffers incoming messages, enforces a minimum interval between 
 - **Incoming Message**: Any Node-RED message to be enqueued.
 
 ### Outputs
-- **Queued Message**: Messages are forwarded in FIFO order while respecting the configured interval.
-
-When timeout mode is selected, messages that exceed the configured timeout are silently discarded with a warning in the node's log.
+- **Output 1**: Messages forwarded in FIFO order while respecting the configured interval.
+- **Output 2**: Messages dropped due to timeout or overflow, with metadata:
+  - `msg.meta.queueDropped` - Always `true`
+  - `msg.meta.queueDropReason` - Either `"timeout"` or `"overflow"`
+  - `msg.meta.queuedDuration` - Time spent in queue before timeout (timeout drops only)
+  - `msg.meta.queueTimeout` - Configured timeout value in ms (timeout drops only)
+  - `msg.meta.queueSize` - Queue size when overflow occurred (overflow drops only)
+  - `msg.meta.queueMaxSize` - Configured max queue size (overflow drops only)
 
 ## Configuration Options
 
@@ -47,11 +52,13 @@ When timeout mode is selected, messages that exceed the configured timeout are s
 - Messages are processed in first-in-first-out order.
 - The node emits messages immediately when the interval requirement has already been satisfied.
 - If necessary, the node waits the remaining interval before releasing the next message.
-- When messages expire due to timeout (and timeout mode is active) they are removed from the queue and a warning is logged.
+- When messages expire due to timeout (and timeout mode is active) they are sent to output 2 with metadata and a warning is logged.
+- When the queue overflows (queue-size mode) excess messages are sent to output 2 with metadata.
 - Node status indicates whether the queue is idle, holding messages, or actively sending.
 
 ## Best Practices
 
 - Pair with Array nodes to control the rate of batch processing pipelines.
 - Use timeouts to keep sensor readings or camera frames current.
-- Combine with Catch or Status nodes to monitor when the queue reaches capacity or drops messages.
+- Connect output 2 to logging, alerting, or fallback processing to handle dropped messages.
+- Use `msg.meta.queueDropReason` to differentiate between timeout and overflow scenarios in downstream logic.
