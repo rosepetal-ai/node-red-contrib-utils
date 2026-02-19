@@ -102,8 +102,7 @@ module.exports = function registerCleanDebugNode(RED) {
         return;
       }
 
-      const format = detectValueType(value);
-      const debugMessage = {
+      var debugMessage = {
         id: node.id,
         z: node.z,
         _alias: node._alias,
@@ -112,12 +111,44 @@ module.exports = function registerCleanDebugNode(RED) {
         property: node.targetType === "full" ? "msg" : node.complete,
         propertyType: node.targetType,
         clean: node.clean,
-        format,
         msg: value,
         _msgid: msg && msg._msgid
       };
 
+      encodeDebugValue(debugMessage);
+
       RED.comms.publish("debug", debugMessage);
+    }
+
+    /**
+     * Encode debugMsg.msg and set debugMsg.format in-place so the value
+     * matches the format expected by Node-RED's debug-utils.js in the editor.
+     * RED.util.encodeObject expects the whole debug message object — it reads
+     * from debugMsg.msg and sets debugMsg.msg + debugMsg.format in-place.
+     * @param {object} debugMsg
+     */
+    function encodeDebugValue(debugMsg) {
+      var value = debugMsg.msg;
+      if (value === null || typeof value === "undefined") {
+        debugMsg.format = (value === null) ? "null" : "undefined";
+        debugMsg.msg = (value === null) ? "null" : "(undefined)";
+      } else if (typeof value === "object") {
+        try {
+          RED.util.encodeObject(debugMsg, { maxLength: DEFAULT_DEBUG_MAX_LENGTH });
+        } catch (_e) {
+          debugMsg.format = "error";
+          debugMsg.msg = "Failed to encode debug value";
+        }
+      } else if (typeof value === "boolean") {
+        debugMsg.format = "boolean";
+        debugMsg.msg = value.toString();
+      } else if (typeof value === "number") {
+        debugMsg.format = "number";
+        debugMsg.msg = value.toString();
+      } else {
+        debugMsg.format = "string[" + ("" + value).length + "]";
+        debugMsg.msg = "" + value;
+      }
     }
   }
 
@@ -328,30 +359,6 @@ module.exports = function registerCleanDebugNode(RED) {
    */
   function createPlaceholder(type, detail) {
     return `[${type} withheld: ${detail}]`;
-  }
-
-  /**
-   * Detect broad value type to help the editor render icons.
-   * @param {*} value
-   */
-  function detectValueType(value) {
-    if (value === null) {
-      return "null";
-    }
-    if (value && typeof value === "object" && value.type === "Buffer" && Array.isArray(value.data)) {
-      return "buffer";
-    }
-    const t = typeof value;
-    if (t === "string" || t === "number" || t === "boolean" || t === "bigint") {
-      return t;
-    }
-    if (Array.isArray(value)) {
-      return "array";
-    }
-    if (value instanceof Date) {
-      return "date";
-    }
-    return "object";
   }
 
   /**
