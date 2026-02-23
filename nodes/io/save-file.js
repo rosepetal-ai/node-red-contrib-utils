@@ -136,6 +136,10 @@ module.exports = function (RED) {
         // Prepare data to write
         const quality = parseInt(config.imageQuality, 10) || 90;
         const pngOptimize = config.pngOptimize === true || config.pngOptimize === 'true';
+        const webpLossless = config.webpLossless === true || config.webpLossless === 'true';
+        const webpSmartSubsample = config.webpSmartSubsample === true || config.webpSmartSubsample === 'true';
+        const webpEffort = parseInt(config.webpEffort, 10);
+        const webpOptions = { lossless: webpLossless, smartSubsample: webpSmartSubsample, effort: webpEffort };
         const jsonIndent = Number.isInteger(parseInt(config.jsonIndent, 10))
           ? parseInt(config.jsonIndent, 10)
           : 2;
@@ -144,7 +148,7 @@ module.exports = function (RED) {
         let isText = false;
 
         if (fileType === 'image') {
-          payloadToWrite = await toImageBuffer(incoming, imageFormat, quality, pngOptimize, NodeUtils, node);
+          payloadToWrite = await toImageBuffer(incoming, imageFormat, quality, pngOptimize, webpOptions, NodeUtils, node);
         } else if (fileType === 'json') {
           if (typeof incoming === 'string') {
             try {
@@ -341,7 +345,7 @@ async function toBinary(value) {
   return Buffer.from(JSON.stringify(value ?? ''), 'utf8');
 }
 
-async function toImageBuffer(imageValue, format, quality, pngOptimize, NodeUtils, node) {
+async function toImageBuffer(imageValue, format, quality, pngOptimize, webpOptions, NodeUtils, node) {
   // Encoded buffer path
   if (Buffer.isBuffer(imageValue) && !(imageValue.width && imageValue.height)) {
     let inputFormat;
@@ -357,7 +361,7 @@ async function toImageBuffer(imageValue, format, quality, pngOptimize, NodeUtils
     }
 
     const sharpInstance = sharp(imageValue);
-    return encodeSharp(sharpInstance, format, quality, pngOptimize);
+    return encodeSharp(sharpInstance, format, quality, pngOptimize, webpOptions);
   }
 
   // Raw image path (uses validator for clear errors)
@@ -391,10 +395,10 @@ async function toImageBuffer(imageValue, format, quality, pngOptimize, NodeUtils
     sharpInstance = sharpInstance.toColourspace('b-w');
   }
 
-  return encodeSharp(sharpInstance, format, quality, pngOptimize);
+  return encodeSharp(sharpInstance, format, quality, pngOptimize, webpOptions);
 }
 
-function encodeSharp(sharpInstance, format, quality, pngOptimize) {
+function encodeSharp(sharpInstance, format, quality, pngOptimize, webpOptions) {
   if (format === 'png') {
     const pngOptions = pngOptimize
       ? { compressionLevel: 9, palette: true }
@@ -402,7 +406,15 @@ function encodeSharp(sharpInstance, format, quality, pngOptimize) {
     return sharpInstance.png(pngOptions).toBuffer();
   }
   if (format === 'webp') {
-    return sharpInstance.webp({ quality }).toBuffer();
+    const opts = { quality };
+    if (webpOptions) {
+      if (webpOptions.lossless) opts.lossless = true;
+      if (webpOptions.smartSubsample) opts.smartSubsample = true;
+      if (typeof webpOptions.effort === 'number' && webpOptions.effort >= 0 && webpOptions.effort <= 6) {
+        opts.effort = webpOptions.effort;
+      }
+    }
+    return sharpInstance.webp(opts).toBuffer();
   }
   return sharpInstance.jpeg({ quality }).toBuffer();
 }
