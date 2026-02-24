@@ -19,6 +19,8 @@
             webpEffort: { value: 4 },
             jsonIndent: { value: 2 },
             overwriteProtection: { value: "true" },
+            maxFiles: { value: "" },
+            maxFilesType: { value: "num" },
             outputPath: { value: "savedFile" },
             outputPathType: { value: "msg" }
         },
@@ -59,6 +61,12 @@
                 default: 'msg',
                 types: ['msg', 'flow', 'global'],
                 typeField: "#node-input-outputPathType"
+            });
+
+            $("#node-input-maxFiles").typedInput({
+                default: 'num',
+                types: ['num', 'msg', 'flow', 'global'],
+                typeField: "#node-input-maxFilesType"
             });
 
             const fileTypeField = $("#node-input-fileType");
@@ -217,6 +225,13 @@
     </div>
 
     <div class="form-row">
+        <label for="node-input-maxFiles"><i class="fa fa-list-ol"></i> Max Files</label>
+        <input type="text" id="node-input-maxFiles" style="width: 120px;" placeholder="0">
+        <input type="hidden" id="node-input-maxFilesType">
+        <span style="margin-left: 10px; color: #666;">0 or blank keeps all files.</span>
+    </div>
+
+    <div class="form-row">
         <label for="node-input-outputPath"><i class="fa fa-sign-out"></i> Result to</label>
         <input type="text" id="node-input-outputPath" style="width: 70%;">
         <input type="hidden" id="node-input-outputPathType">
@@ -251,6 +266,8 @@
         <dd>Spacing for pretty-printed JSON output.</dd>
         <dt>Overwrite <span class="property-type">enum</span></dt>
         <dd>By default the node avoids overwriting existing files, appending a numeric suffix when needed.</dd>
+        <dt>Max Files <span class="property-type">num | msg | flow | global</span></dt>
+        <dd>Maximum number of files to keep in the folder. After saving, the oldest files (by modification time) are removed so the total does not exceed this limit. Set to 0 or leave blank to keep all files.</dd>
         <dt>Result to <span class="property-type">msg | flow | global</span></dt>
         <dd>Where to store a summary of the saved file: <code>{ path, filename, type, extension, sizeBytes, format? }</code>.</dd>
     </dl>

@@ -42,6 +42,17 @@ module.exports = function (RED) {
         }
         await fs.mkdir(folderPath, { recursive: true });
 
+        // Resolve max files retention limit
+        let maxFiles = 0;
+        const maxFilesType = config.maxFilesType || 'num';
+        if (config.maxFiles !== undefined && config.maxFiles !== '') {
+          const maxFilesRaw = maxFilesType === 'num'
+            ? config.maxFiles
+            : await evaluateProperty(config.maxFiles, maxFilesType);
+          maxFiles = parseInt(maxFilesRaw, 10);
+          if (isNaN(maxFiles) || maxFiles < 0) maxFiles = 0;
+        }
+
         const inputPath = config.inputPath || 'payload';
         const inputPathType = config.inputPathType || 'msg';
         let incoming;
@@ -178,6 +189,15 @@ module.exports = function (RED) {
         const sizeBytes = isText
           ? Buffer.byteLength(payloadToWrite, 'utf8')
           : payloadToWrite.length;
+
+        // Enforce max files retention policy
+        if (maxFiles > 0) {
+          try {
+            await enforceMaxFiles(folderPath, maxFiles);
+          } catch (policyErr) {
+            node.warn(`Max files enforcement failed: ${policyErr.message}`);
+          }
+        }
 
         if (fileType === 'json' && sizeBytes >= JSON_WARN_BYTES) {
           const sizeMB = (sizeBytes / (1024 * 1024)).toFixed(1);
@@ -417,6 +437,26 @@ function encodeSharp(sharpInstance, format, quality, pngOptimize, webpOptions) {
     return sharpInstance.webp(opts).toBuffer();
   }
   return sharpInstance.jpeg({ quality }).toBuffer();
+}
+
+async function enforceMaxFiles(folderPath, maxCount) {
+  const entries = await fs.readdir(folderPath, { withFileTypes: true });
+  const files = entries.filter(e => e.isFile());
+  if (files.length <= maxCount) return;
+
+  const withStats = await Promise.all(
+    files.map(async (f) => {
+      const fullPath = path.join(folderPath, f.name);
+      const stat = await fs.stat(fullPath);
+      return { fullPath, mtimeMs: stat.mtimeMs };
+    })
+  );
+  withStats.sort((a, b) => a.mtimeMs - b.mtimeMs);
+
+  const toRemove = withStats.length - maxCount;
+  for (let i = 0; i < toRemove; i++) {
+    await fs.unlink(withStats[i].fullPath);
+  }
 }
 
 async function getDiskUsageInfo(targetPath, node, warnState) {
