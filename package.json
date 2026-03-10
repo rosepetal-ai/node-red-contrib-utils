@@ -1,6 +1,6 @@
 {
   "name": "@rosepetal/node-red-contrib-utils",
-  "version": "1.1.5",
+  "version": "1.1.6",
   "description": "Utility and I/O nodes for Node-RED, including array helpers and file saving.",
   "scripts": {
     "test": "echo \"Error: no test specified\" && exit 1"
@@ -43,6 +43,7 @@
       "rp-array-out": "nodes/io/array-out.js",
       "rp-array-select": "nodes/io/array-select.js",
       "rp-queue": "nodes/io/queue.js",
+      "rp-rate-limit": "nodes/io/rate-limit.js",
       "rp-save-file": "nodes/io/save-file.js",
       "rp-clean-debug": "nodes/util/clean-debug.js",
       "rp-block-detect": "nodes/util/block-detect.js",

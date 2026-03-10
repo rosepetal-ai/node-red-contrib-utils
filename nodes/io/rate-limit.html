@@ -1,0 +1,156 @@
+<script type="text/javascript">
+    RED.nodes.registerType('rp-rate-limit', {
+        category: 'RP Utils',
+        color: '#87CEEB',
+        defaults: {
+            name:              { value: "" },
+            timestampPath:     { value: "timestamp" },
+            timestampPathType: { value: "msg" },
+            intervalType:      { value: "num" },
+            intervalValue:     { value: 250 },
+            windowSizeType:    { value: "num" },
+            windowSizeValue:   { value: 5000 },
+            outputPath:        { value: "" },
+            outputPathType:    { value: "msg" }
+        },
+        inputs: 1,
+        outputs: 2,
+        outputLabels: ["passed", "throttled"],
+        icon: "font-awesome/fa-tachometer",
+        label: function() {
+            if (this.name) return this.name;
+            return "Rate Limit";
+        },
+        oneditprepare: function() {
+            $("#node-input-timestampPath").typedInput({
+                default: 'msg',
+                types: ['msg', 'flow', 'global'],
+                typeField: "#node-input-timestampPathType"
+            });
+
+            $("#node-input-intervalValue").typedInput({
+                default: 'num',
+                types: ['num', 'msg', 'flow', 'global'],
+                typeField: "#node-input-intervalType"
+            });
+
+            $("#node-input-windowSizeValue").typedInput({
+                default: 'num',
+                types: ['num', 'msg', 'flow', 'global'],
+                typeField: "#node-input-windowSizeType"
+            });
+
+            $("#node-input-outputPath").typedInput({
+                default: 'msg',
+                types: ['msg', 'flow', 'global'],
+                typeField: "#node-input-outputPathType"
+            });
+        }
+    });
+</script>
+
+<script type="text/x-red" data-template-name="rp-rate-limit">
+    <div class="form-row">
+        <label for="node-input-name"><i class="fa fa-tag"></i> Name</label>
+        <input type="text" id="node-input-name" placeholder="Name">
+    </div>
+
+    <hr>
+
+    <div class="form-row">
+        <label for="node-input-timestampPath"><i class="fa fa-clock-o"></i> Timestamp</label>
+        <input type="text" id="node-input-timestampPath" style="width: 70%;">
+        <input type="hidden" id="node-input-timestampPathType">
+    </div>
+    <div class="form-tips">
+        <b>Tip:</b> The external timestamp to use for rate decisions. Accepts ISO 8601 strings,
+        epoch milliseconds, or Date objects.
+    </div>
+
+    <div class="form-row">
+        <label for="node-input-intervalValue"><i class="fa fa-tachometer"></i> Interval (ms)</label>
+        <input type="text" id="node-input-intervalValue" style="width: 70%;" placeholder="250">
+        <input type="hidden" id="node-input-intervalType">
+    </div>
+    <div class="form-tips">
+        <b>Tip:</b> Minimum milliseconds between passed messages. Messages arriving sooner
+        are sent to the throttled output.
+    </div>
+
+    <div class="form-row">
+        <label for="node-input-windowSizeValue"><i class="fa fa-history"></i> Window (ms)</label>
+        <input type="text" id="node-input-windowSizeValue" style="width: 70%;" placeholder="5000">
+        <input type="hidden" id="node-input-windowSizeType">
+    </div>
+    <div class="form-tips">
+        <b>Tip:</b> Rolling time window for cadence calculation.
+        Messages older than this are dropped from the history.
+    </div>
+
+    <div class="form-row">
+        <label for="node-input-outputPath"><i class="fa fa-sign-out"></i> Output to</label>
+        <input type="text" id="node-input-outputPath" style="width: 70%;">
+        <input type="hidden" id="node-input-outputPathType">
+    </div>
+    <div class="form-tips">
+        <b>Tip:</b> Where to write timing data (timeBetween, avgTimeBetween, messageCount).
+    </div>
+</script>
+
+<script type="text/x-red" data-help-name="rp-rate-limit">
+    <p>Rate-limits messages using external timestamps from hardware or sensors,
+    rather than internal Node.js timing which can drift under event-loop load.</p>
+
+    <h3>Properties</h3>
+    <dl class="message-properties">
+        <dt>Timestamp <span class="property-type">msg | flow | global</span></dt>
+        <dd>Path to the external timestamp value. Accepts ISO 8601 strings,
+        epoch milliseconds, or Date objects. Default: <code>msg.timestamp</code>.</dd>
+
+        <dt>Interval (ms) <span class="property-type">number | msg | flow | global</span></dt>
+        <dd>Minimum milliseconds between passed messages. Default: <code>250</code>.</dd>
+
+        <dt>Window (ms) <span class="property-type">number | msg | flow | global</span></dt>
+        <dd>Rolling window duration for average cadence calculation. Default: <code>5000</code>.</dd>
+
+        <dt>Output to <span class="property-type">msg | flow | global</span></dt>
+        <dd>Where to write timing data on each message.</dd>
+    </dl>
+
+    <h3>Outputs</h3>
+    <dl class="message-properties">
+        <dt>Output 1 <span class="property-type">message</span></dt>
+        <dd>Messages that pass the rate limit (first message or enough time elapsed
+        since last accepted message).</dd>
+
+        <dt>Output 2 <span class="property-type">message</span></dt>
+        <dd>Messages that are throttled (arrived sooner than the configured interval
+        since last accepted message).</dd>
+    </dl>
+
+    <h3>Timing Data</h3>
+    <p>Both passed and throttled messages receive timing data at the configured
+    output path:</p>
+    <dl class="message-properties">
+        <dt>timeBetween <span class="property-type">number</span></dt>
+        <dd>Milliseconds since the last accepted message. <code>-1</code> for
+        the first message.</dd>
+
+        <dt>avgTimeBetween <span class="property-type">number</span></dt>
+        <dd>Average time between messages over the rolling window (rounded to integer). <code>0</code>
+        when fewer than 2 messages exist in the window.</dd>
+
+        <dt>messageCount <span class="property-type">number</span></dt>
+        <dd>Number of messages currently in the rolling window.</dd>
+    </dl>
+
+    <h3>Behavior</h3>
+    <ul>
+        <li>The first message always passes (timeBetween = -1).</li>
+        <li>Subsequent messages pass only if the external timestamp difference
+        from the last <em>accepted</em> message meets or exceeds the interval.</li>
+        <li>All messages (passed and throttled) are included in the rolling window
+        for cadence calculation.</li>
+        <li>Invalid timestamps cause the message to be dropped with a warning.</li>
+    </ul>
+</script>
