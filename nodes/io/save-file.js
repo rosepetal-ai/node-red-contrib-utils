@@ -5,7 +5,10 @@
 const fs = require('fs').promises;
 const path = require('path');
 const sharp = require('sharp');
+const zlib = require('zlib');
 const JSON_WARN_BYTES = 5 * 1024 * 1024; // warn when JSON output is larger than 5MB
+
+const _chunkCrc32 = (buf) => zlib.crc32(buf);
 
 module.exports = function (RED) {
   const NodeUtils = require('../../lib/node-utils.js')(RED);
@@ -146,7 +149,7 @@ module.exports = function (RED) {
 
         // Prepare data to write
         const quality = parseInt(config.imageQuality, 10) || 90;
-        const pngOptimize = config.pngOptimize === true || config.pngOptimize === 'true';
+        const pngCompression = Math.max(0, Math.min(9, parseInt(config.pngCompression, 10) || 0));
         const webpLossless = config.webpLossless === true || config.webpLossless === 'true';
         const webpSmartSubsample = config.webpSmartSubsample === true || config.webpSmartSubsample === 'true';
         const webpEffort = parseInt(config.webpEffort, 10);
@@ -159,7 +162,7 @@ module.exports = function (RED) {
         let isText = false;
 
         if (fileType === 'image') {
-          payloadToWrite = await toImageBuffer(incoming, imageFormat, quality, pngOptimize, webpOptions, NodeUtils, node);
+          payloadToWrite = await toImageBuffer(incoming, imageFormat, quality, pngCompression, webpOptions, NodeUtils, node);
         } else if (fileType === 'json') {
           if (typeof incoming === 'string') {
             try {
@@ -262,6 +265,7 @@ function mapExtension(ext) {
   if (lower === 'jpg' || lower === 'jpeg') return { type: 'image', format: 'jpg' };
   if (lower === 'png') return { type: 'image', format: 'png' };
   if (lower === 'webp') return { type: 'image', format: 'webp' };
+  if (lower === 'bmp') return { type: 'image', format: 'bmp' };
   if (lower === 'json') return { type: 'json' };
   if (lower === 'txt') return { type: 'text' };
   if (lower === 'bin' || lower === 'dat') return { type: 'binary' };
@@ -365,7 +369,7 @@ async function toBinary(value) {
   return Buffer.from(JSON.stringify(value ?? ''), 'utf8');
 }
 
-async function toImageBuffer(imageValue, format, quality, pngOptimize, webpOptions, NodeUtils, node) {
+async function toImageBuffer(imageValue, format, quality, pngCompression, webpOptions, NodeUtils, node) {
   // Encoded buffer path
   if (Buffer.isBuffer(imageValue) && !(imageValue.width && imageValue.height)) {
     let inputFormat;
@@ -381,7 +385,7 @@ async function toImageBuffer(imageValue, format, quality, pngOptimize, webpOptio
     }
 
     const sharpInstance = sharp(imageValue);
-    return encodeSharp(sharpInstance, format, quality, pngOptimize, webpOptions);
+    return encodeSharp(sharpInstance, format, quality, pngCompression, webpOptions);
   }
 
   // Raw image path (uses validator for clear errors)
@@ -394,6 +398,19 @@ async function toImageBuffer(imageValue, format, quality, pngOptimize, webpOptio
   const channels = validated.channels;
   let data = validated.data;
 
+  // BMP stores pixels in BGR order natively
+  if (format === 'bmp') {
+    let nativeData = data;
+    if (colorSpace === 'RGB' || colorSpace === 'RGBA') {
+      nativeData = Buffer.from(data);
+      for (let i = 0; i < nativeData.length; i += channels) {
+        const t = nativeData[i]; nativeData[i] = nativeData[i + 2]; nativeData[i + 2] = t;
+      }
+    }
+    const buf = Buffer.isBuffer(nativeData) ? nativeData : Buffer.from(nativeData);
+    return encodeBmpRaw(buf, validated.width, validated.height, channels);
+  }
+
   if (colorSpace === 'BGR' || colorSpace === 'BGRA') {
     data = Buffer.from(data);
     for (let i = 0; i < data.length; i += channels) {
@@ -401,6 +418,12 @@ async function toImageBuffer(imageValue, format, quality, pngOptimize, webpOptio
       data[i] = data[i + 2];
       data[i + 2] = t;
     }
+  }
+
+  // Fast PNG path: raw encoder with native CRC32, no Sharp overhead
+  if (format === 'png' && pngCompression === 0) {
+    const buf = Buffer.isBuffer(data) ? data : Buffer.from(data);
+    return encodePngRaw(buf, validated.width, validated.height, channels);
   }
 
   let sharpInstance = sharp(data, {
@@ -415,15 +438,113 @@ async function toImageBuffer(imageValue, format, quality, pngOptimize, webpOptio
     sharpInstance = sharpInstance.toColourspace('b-w');
   }
 
-  return encodeSharp(sharpInstance, format, quality, pngOptimize, webpOptions);
+  return encodeSharp(sharpInstance, format, quality, pngCompression, webpOptions);
 }
 
-function encodeSharp(sharpInstance, format, quality, pngOptimize, webpOptions) {
+function encodeBmpRaw(data, width, height, channels) {
+  const bpp = channels * 8;
+  const rowBytes = width * channels;
+  const rowPadding = (4 - (rowBytes % 4)) % 4;
+  const paddedRow = rowBytes + rowPadding;
+  const hasPalette = channels === 1;
+  const paletteSize = hasPalette ? 1024 : 0; // 256 RGBX entries
+  const headerSize = 14 + 40 + paletteSize;
+  const pixelDataSize = paddedRow * height;
+  const fileSize = headerSize + pixelDataSize;
+
+  const buf = Buffer.allocUnsafe(fileSize);
+
+  // BITMAPFILEHEADER (14 bytes)
+  buf[0] = 0x42; buf[1] = 0x4D; // 'BM'
+  buf.writeUInt32LE(fileSize, 2);
+  buf.writeUInt16LE(0, 6);  // reserved
+  buf.writeUInt16LE(0, 8);  // reserved
+  buf.writeUInt32LE(headerSize, 10);
+
+  // BITMAPINFOHEADER (40 bytes)
+  buf.writeUInt32LE(40, 14);
+  buf.writeInt32LE(width, 18);
+  buf.writeInt32LE(-height, 22); // negative = top-down
+  buf.writeUInt16LE(1, 26);     // planes
+  buf.writeUInt16LE(bpp, 28);
+  buf.writeUInt32LE(0, 30);     // no compression
+  buf.writeUInt32LE(pixelDataSize, 34);
+  buf.writeInt32LE(2835, 38);   // ~72 DPI horizontal
+  buf.writeInt32LE(2835, 42);   // ~72 DPI vertical
+  buf.writeUInt32LE(hasPalette ? 256 : 0, 46); // colors used
+  buf.writeUInt32LE(0, 50);     // important colors
+
+  // Grayscale palette for 1-channel images
+  if (hasPalette) {
+    for (let i = 0; i < 256; i++) {
+      const off = 54 + i * 4;
+      buf[off] = i; buf[off + 1] = i; buf[off + 2] = i; buf[off + 3] = 0;
+    }
+  }
+
+  // Pixel data with row padding
+  const padBytes = Buffer.alloc(rowPadding); // zeroed
+  for (let y = 0; y < height; y++) {
+    const srcOff = y * rowBytes;
+    const dstOff = headerSize + y * paddedRow;
+    data.copy(buf, dstOff, srcOff, srcOff + rowBytes);
+    if (rowPadding > 0) {
+      padBytes.copy(buf, dstOff + rowBytes);
+    }
+  }
+
+  return buf;
+}
+
+function encodePngRaw(data, width, height, channels) {
+  const colorType = channels === 1 ? 0 : channels === 3 ? 2 : 6;
+  const stride = width * channels;
+  const filtered = Buffer.allocUnsafe(height * (1 + stride));
+  for (let y = 0; y < height; y++) {
+    const rowOffset = y * (1 + stride);
+    filtered[rowOffset] = 0; // no filter
+    data.copy(filtered, rowOffset + 1, y * stride, (y + 1) * stride);
+  }
+  const compressed = zlib.deflateSync(filtered, { level: 0 });
+  const out = Buffer.allocUnsafe(57 + compressed.length);
+  let o = 0;
+
+  // PNG signature
+  out[o++] = 137; out[o++] = 80; out[o++] = 78; out[o++] = 71;
+  out[o++] = 13;  out[o++] = 10; out[o++] = 26; out[o++] = 10;
+
+  // IHDR chunk
+  out.writeUInt32BE(13, o); o += 4;
+  const ihdrTypeStart = o;
+  out.write('IHDR', o); o += 4;
+  out.writeUInt32BE(width, o); o += 4;
+  out.writeUInt32BE(height, o); o += 4;
+  out[o++] = 8; // bit depth
+  out[o++] = colorType;
+  out[o++] = 0; // compression
+  out[o++] = 0; // filter
+  out[o++] = 0; // interlace
+  out.writeUInt32BE(_chunkCrc32(out.subarray(ihdrTypeStart, o)), o); o += 4;
+
+  // IDAT chunk
+  out.writeUInt32BE(compressed.length, o); o += 4;
+  const idatTypeStart = o;
+  out.write('IDAT', o); o += 4;
+  compressed.copy(out, o); o += compressed.length;
+  out.writeUInt32BE(_chunkCrc32(out.subarray(idatTypeStart, o)), o); o += 4;
+
+  // IEND chunk
+  out.writeUInt32BE(0, o); o += 4;
+  const iendTypeStart = o;
+  out.write('IEND', o); o += 4;
+  out.writeUInt32BE(_chunkCrc32(out.subarray(iendTypeStart, o)), o);
+
+  return out;
+}
+
+function encodeSharp(sharpInstance, format, quality, pngCompression, webpOptions) {
   if (format === 'png') {
-    const pngOptions = pngOptimize
-      ? { compressionLevel: 9, palette: true }
-      : { compressionLevel: 6 };
-    return sharpInstance.png(pngOptions).toBuffer();
+    return sharpInstance.png({ compressionLevel: pngCompression }).toBuffer();
   }
   if (format === 'webp') {
     const opts = { quality };

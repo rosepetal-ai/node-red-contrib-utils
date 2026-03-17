@@ -13,7 +13,7 @@
             fileType: { value: "auto" },
             imageFormat: { value: "jpg" },
             imageQuality: { value: 90 },
-            pngOptimize: { value: false },
+            pngCompression: { value: 8 },
             webpLossless: { value: false },
             webpSmartSubsample: { value: false },
             webpEffort: { value: 4 },
@@ -93,7 +93,7 @@
                 const showImage = fileTypeField.val() === 'image' || fileTypeField.val() === 'auto';
                 pngOnlyFields.toggle(showImage && fmt === 'png');
                 webpOnlyFields.toggle(showImage && fmt === 'webp');
-                qualityFields.toggle(showImage && fmt !== 'png');
+                qualityFields.toggle(showImage && fmt !== 'png' && fmt !== 'bmp');
             }
 
             function toggleSeparators() {
@@ -169,6 +169,7 @@
             <option value="jpg">JPG</option>
             <option value="png">PNG</option>
             <option value="webp">WebP</option>
+            <option value="bmp">BMP</option>
         </select>
     </div>
 
@@ -177,10 +178,8 @@
         <input type="number" id="node-input-imageQuality" min="1" max="100" step="1" style="width: 30%;" placeholder="90">
     </div>
     <div class="form-row savefile-image-options savefile-png-only">
-        <label for="node-input-pngOptimize"><i class="fa fa-leaf"></i> PNG Options</label>
-        <label style="margin-left: 0; width: auto;">
-            <input type="checkbox" id="node-input-pngOptimize" style="margin-right: 5px;"> Optimize PNG
-        </label>
+        <label for="node-input-pngCompression"><i class="fa fa-leaf"></i> Compression</label>
+        <input type="number" id="node-input-pngCompression" min="0" max="9" step="1" style="width: 30%;" placeholder="0">
     </div>
     <div class="form-row savefile-image-options savefile-webp-only">
         <label for="node-input-webpLossless"><i class="fa fa-lock"></i> WebP Lossless</label>
@@ -258,8 +257,8 @@
         <dd>Optional name without slashes. When blank, a timestamped name is generated. If you include an extension here it is used.</dd>
         <dt>File Type <span class="property-type">enum</span></dt>
         <dd>Force saving as image, JSON, text, or binary, or let the node auto-detect from data/extension.</dd>
-        <dt>Image Format / Quality / Optimize PNG <span class="property-type">enum/number/bool</span></dt>
-        <dd>Applies when saving images. Raw image objects are validated and encoded with Sharp.</dd>
+        <dt>Image Format / Quality / PNG Compression <span class="property-type">enum/number/number</span></dt>
+        <dd>Applies when saving images. PNG compression level (0-9): 0 uses a fast raw encoder, 1-9 use Sharp with increasing compression. BMP saves uncompressed with no additional options.</dd>
         <dt>WebP Lossless / Smart Subsample / Effort <span class="property-type">bool/bool/number</span></dt>
         <dd>WebP-specific encoding options. <b>Lossless</b> encodes without quality loss. <b>Smart Subsample</b> improves chroma downsampling for lossy WebP. <b>Effort</b> (0-6) controls the compression effort trade-off; higher values produce smaller files but encode more slowly.</dd>
         <dt>JSON Indent <span class="property-type">number</span></dt>
