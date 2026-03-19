@@ -20,7 +20,9 @@
             saveConfigType: { value: "msg" },
             imageField: { value: "bitmap" },
             filenameField: { value: "filename" },
+            filenameFieldType: { value: "item" },
             outputDirField: { value: "outputDir" },
+            outputDirFieldType: { value: "item" },
             fileType: { value: "auto" },
             imageFormat: { value: "jpg" },
             imageQuality: { value: 90 },
@@ -72,6 +74,24 @@
                 default: 'msg',
                 types: ['msg', 'flow', 'global'],
                 typeField: "#node-input-saveConfigType"
+            });
+
+            const itemFieldType = {
+                value: 'item',
+                label: 'Item field',
+                icon: 'red/images/typedInput/json.svg'
+            };
+
+            $("#node-input-filenameField").typedInput({
+                default: 'item',
+                types: [itemFieldType, 'str', 'msg', 'flow', 'global'],
+                typeField: "#node-input-filenameFieldType"
+            });
+
+            $("#node-input-outputDirField").typedInput({
+                default: 'item',
+                types: [itemFieldType, 'str', 'msg', 'flow', 'global'],
+                typeField: "#node-input-outputDirFieldType"
             });
 
             $("#node-input-outputPath").typedInput({
@@ -169,19 +189,21 @@
         <input type="hidden" id="node-input-saveConfigType">
     </div>
     <div class="form-tips savefile-multiple-mode">
-        Array of objects (or single object). Each object should contain the fields specified below.
+        Array of objects (or single object). Each object must contain the image field. Filename and output dir can come from each item or be set globally via msg/flow/global.
     </div>
     <div class="form-row savefile-multiple-mode">
         <label for="node-input-imageField"><i class="fa fa-picture-o"></i> Image field</label>
         <input type="text" id="node-input-imageField" placeholder="bitmap">
     </div>
     <div class="form-row savefile-multiple-mode">
-        <label for="node-input-filenameField"><i class="fa fa-file-text-o"></i> Filename field</label>
-        <input type="text" id="node-input-filenameField" placeholder="filename">
+        <label for="node-input-filenameField"><i class="fa fa-file-text-o"></i> Filename</label>
+        <input type="text" id="node-input-filenameField" style="width: 70%;" placeholder="filename">
+        <input type="hidden" id="node-input-filenameFieldType">
     </div>
     <div class="form-row savefile-multiple-mode">
-        <label for="node-input-outputDirField"><i class="fa fa-folder-open"></i> Output dir field</label>
-        <input type="text" id="node-input-outputDirField" placeholder="outputDir">
+        <label for="node-input-outputDirField"><i class="fa fa-folder-open"></i> Output dir</label>
+        <input type="text" id="node-input-outputDirField" style="width: 70%;" placeholder="outputDir">
+        <input type="hidden" id="node-input-outputDirFieldType">
     </div>
 
     <hr>
@@ -331,10 +353,10 @@
         <dd>(Multiple mode) Array of objects, each describing one file to save.</dd>
         <dt>Image field <span class="property-type">string</span></dt>
         <dd>(Multiple mode) Key name for the data/image in each object. Default: <code>bitmap</code>.</dd>
-        <dt>Filename field <span class="property-type">string</span></dt>
-        <dd>(Multiple mode) Key name for the filename in each object. Default: <code>filename</code>.</dd>
-        <dt>Output dir field <span class="property-type">string</span></dt>
-        <dd>(Multiple mode) Key name for the output directory in each object. Default: <code>outputDir</code>.</dd>
+        <dt>Filename <span class="property-type">item | msg | flow | global</span></dt>
+        <dd>(Multiple mode) When set to <b>Item field</b>, reads the filename from each object using the specified key (default: <code>filename</code>). When set to msg/flow/global, uses that single value for all items.</dd>
+        <dt>Output dir <span class="property-type">item | msg | flow | global</span></dt>
+        <dd>(Multiple mode) When set to <b>Item field</b>, reads the output directory from each object using the specified key (default: <code>outputDir</code>). When set to msg/flow/global, uses that single directory for all items.</dd>
         <dt>Folder <span class="property-type">string | env | msg | flow | global</span></dt>
         <dd>(Single mode) Destination directory. Created automatically if missing.</dd>
         <dt>Filename <span class="property-type">string | msg | flow | global</span></dt>

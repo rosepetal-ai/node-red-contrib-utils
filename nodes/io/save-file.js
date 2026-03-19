@@ -261,7 +261,15 @@ module.exports = function (RED) {
 
           const imageField = config.imageField || 'bitmap';
           const filenameField = config.filenameField || 'filename';
+          const filenameFieldType = config.filenameFieldType || 'item';
           const outputDirField = config.outputDirField || 'outputDir';
+          const outputDirFieldType = config.outputDirFieldType || 'item';
+
+          // Resolve shared values when type is msg/flow/global
+          const sharedFilename = filenameFieldType !== 'item'
+            ? await evaluateProperty(filenameField, filenameFieldType) : undefined;
+          const sharedOutputDir = outputDirFieldType !== 'item'
+            ? await evaluateProperty(outputDirField, outputDirFieldType) : undefined;
 
           const results = [];
           let skipped = 0;
@@ -282,15 +290,20 @@ module.exports = function (RED) {
                 continue;
               }
 
-              const folderPath = String(item[outputDirField] ?? '').trim();
+              const folderPath = outputDirFieldType === 'item'
+                ? String(item[outputDirField] ?? '').trim()
+                : String(sharedOutputDir ?? '').trim();
               if (!folderPath) {
-                node.warn(`Item ${idx}: missing or empty "${outputDirField}" field, skipping.`);
+                node.warn(`Item ${idx}: missing or empty output dir, skipping.`);
                 skipped++;
                 continue;
               }
 
-              const filenameRaw = item[filenameField] !== undefined && item[filenameField] !== null
-                ? String(item[filenameField]).trim() : '';
+              const filenameRaw = filenameFieldType === 'item'
+                ? (item[filenameField] !== undefined && item[filenameField] !== null
+                    ? String(item[filenameField]).trim() : '')
+                : (sharedFilename !== undefined && sharedFilename !== null
+                    ? String(sharedFilename).trim() : '');
 
               const resultInfo = await saveOneFile(folderPath, incoming, filenameRaw, saveOpts);
               results.push(resultInfo);
