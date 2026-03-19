@@ -125,7 +125,7 @@
         <input type="hidden" id="node-input-inputPathType">
     </div>
     <div class="form-tips">
-        <b>Input:</b> Location of the data to save. Defaults to <code>msg.payload</code>.
+        <b>Input:</b> Location of the data to save. Defaults to <code>msg.payload</code>. Can be an array for batch saving.
     </div>
 
     <hr>
@@ -236,7 +236,7 @@
         <input type="hidden" id="node-input-outputPathType">
     </div>
     <div class="form-tips">
-        <b>Result:</b> Stores <code>{path, filename, type, extension, sizeBytes[, format]}</code> for downstream nodes. Defaults to <code>msg.savedFile</code>.
+        <b>Result:</b> Stores <code>{path, filename, type, extension, sizeBytes[, format]}</code> for downstream nodes. Returns an array of results when batch saving. Defaults to <code>msg.savedFile</code>.
     </div>
 </script>
 
@@ -245,16 +245,25 @@
 
     <h3>Inputs</h3>
     <dl class="message-properties">
-        <dt>payload (default) <span class="property-type">any</span></dt>
+        <dt>payload (default) <span class="property-type">any | array</span></dt>
         <dd>Data to write. Auto-detection treats raw image objects and encoded image buffers as images; objects/arrays as JSON; strings as text; buffers as binary.</dd>
     </dl>
+
+    <h3>Batch mode</h3>
+    <p>Input, Folder, and Filename can each resolve to an array. When any of them is an array, the node saves one file per index:</p>
+    <ul>
+        <li>All arrays, equal length — one save per element, no warnings.</li>
+        <li>Arrays of different lengths — processes the minimum length and warns.</li>
+        <li>Mix of arrays and scalars — the scalar value is reused for every item and warns.</li>
+    </ul>
+    <p>In batch mode, the result output is an array of result objects instead of a single object.</p>
 
     <h3>Properties</h3>
     <dl class="message-properties">
         <dt>Folder <span class="property-type">string | env | msg | flow | global</span></dt>
-        <dd>Destination directory. Created automatically if missing.</dd>
+        <dd>Destination directory. Created automatically if missing. Can resolve to an array of paths for batch saving.</dd>
         <dt>Filename <span class="property-type">string | msg | flow | global</span></dt>
-        <dd>Optional name without slashes. When blank, a timestamped name is generated. If you include an extension here it is used.</dd>
+        <dd>Optional name without slashes. When blank, a timestamped name is generated. If you include an extension here it is used. Can resolve to an array of names for batch saving.</dd>
         <dt>File Type <span class="property-type">enum</span></dt>
         <dd>Force saving as image, JSON, text, or binary, or let the node auto-detect from data/extension.</dd>
         <dt>Image Format / Quality / PNG Compression <span class="property-type">enum/number/number</span></dt>
@@ -277,5 +286,6 @@
         <li>Image inputs accept encoded buffers or raw objects {data, width, height, channels, colorSpace}.</li>
         <li>JSON inputs are pretty-printed; JSON strings are preserved if already valid.</li>
         <li>When overwrite protection is enabled, a numeric suffix is appended if the target file exists.</li>
+        <li>Batch saves are processed sequentially to ensure correct overwrite protection and max-files enforcement.</li>
     </ul>
 </script>
