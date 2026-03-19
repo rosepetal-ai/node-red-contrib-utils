@@ -34,6 +34,139 @@ module.exports = function (RED) {
     return map;
   }
 
+  /**
+   * Save a single file to disk. Shared by both single and multiple modes.
+   * Returns a resultInfo object on success.
+   */
+  async function saveOneFile(folderPath, incoming, filenameRaw, opts) {
+    const { configType, imageFormat: defaultImageFormat, quality, pngCompression, webpOptions,
+            jsonIndent, overwriteEnabled, maxFiles, diskWarnState, node } = opts;
+
+    await fs.mkdir(folderPath, { recursive: true });
+
+    if (/[\\/]/.test(filenameRaw)) {
+      throw new Error('Filename must not contain path separators.');
+    }
+    const parsedName = path.parse(filenameRaw);
+    let baseName = parsedName.name || '';
+    let extFromName = parsedName.ext ? parsedName.ext.replace(/^\./, '') : '';
+
+    // Determine file type and format
+    let imageFormat = String(defaultImageFormat).toLowerCase();
+    const extInfo = mapExtension(extFromName);
+
+    let fileType = configType;
+    if (fileType === 'auto' && extInfo?.type) {
+      fileType = extInfo.type;
+      if (extInfo.format) imageFormat = extInfo.format;
+    }
+
+    const inferred = fileType === 'auto'
+      ? await inferFileType(incoming, extInfo)
+      : { type: fileType, format: imageFormat };
+
+    fileType = inferred.type;
+    if (fileType === 'image' && inferred.format) imageFormat = inferred.format;
+    if (fileType === 'image' && extInfo?.format) imageFormat = extInfo.format;
+
+    if (!['image', 'json', 'text', 'binary'].includes(fileType)) {
+      throw new Error(`Unsupported file type: ${fileType}`);
+    }
+
+    // Finalize extension and name
+    let extension = extFromName || defaultExtension(fileType, imageFormat);
+    if (!extension) {
+      throw new Error('Unable to determine file extension.');
+    }
+    if (!baseName) {
+      baseName = defaultBaseName(fileType);
+    }
+    let filename = `${baseName}.${extension}`;
+    let filePath = path.join(folderPath, filename);
+
+    if (overwriteEnabled) {
+      const dirMap = await getCachedDir(folderPath);
+      let counter = 2;
+      while (dirMap.has(filename)) {
+        filename = `${baseName}_${counter}.${extension}`;
+        filePath = path.join(folderPath, filename);
+        counter += 1;
+        if (counter > 1000) {
+          throw new Error('Too many file variations exist in target folder.');
+        }
+      }
+    }
+
+    // Check disk space (skip if 90%+ used)
+    const diskInfo = await getDiskUsageInfo(folderPath, node, diskWarnState);
+    if (diskInfo && diskInfo.usedRatio >= 0.9) {
+      const usedPercent = (diskInfo.usedRatio * 100).toFixed(1);
+      throw new Error(`Storage at "${folderPath}" is ${usedPercent}% full. Skipping save to avoid exhausting disk space.`);
+    }
+
+    // Prepare data to write
+    let payloadToWrite;
+    let isText = false;
+
+    if (fileType === 'image') {
+      payloadToWrite = await toImageBuffer(incoming, imageFormat, quality, pngCompression, webpOptions, NodeUtils, node);
+    } else if (fileType === 'json') {
+      if (typeof incoming === 'string') {
+        try {
+          JSON.parse(incoming);
+          payloadToWrite = incoming;
+        } catch {
+          payloadToWrite = JSON.stringify(incoming, null, jsonIndent);
+        }
+      } else {
+        payloadToWrite = JSON.stringify(incoming, null, jsonIndent);
+      }
+      isText = true;
+    } else if (fileType === 'text') {
+      payloadToWrite = incoming === undefined || incoming === null ? '' : String(incoming);
+      isText = true;
+    } else {
+      payloadToWrite = await toBinary(incoming);
+    }
+
+    if (isText) {
+      await fs.writeFile(filePath, payloadToWrite, 'utf8');
+    } else {
+      await fs.writeFile(filePath, payloadToWrite);
+    }
+    dirCache.get(folderPath)?.set(filename, Date.now());
+
+    const sizeBytes = isText
+      ? Buffer.byteLength(payloadToWrite, 'utf8')
+      : payloadToWrite.length;
+
+    // Enforce max files retention policy
+    if (maxFiles > 0) {
+      try {
+        await enforceMaxFiles(folderPath, maxFiles, dirCache.get(folderPath));
+      } catch (policyErr) {
+        node.warn(`Max files enforcement failed: ${policyErr.message}`);
+      }
+    }
+
+    if (fileType === 'json' && sizeBytes >= JSON_WARN_BYTES) {
+      const sizeMB = (sizeBytes / (1024 * 1024)).toFixed(1);
+      node.warn(`JSON output is large (${sizeMB} MB); this may impact the event loop and memory usage.`);
+    }
+
+    const resultInfo = {
+      path: filePath,
+      filename,
+      type: fileType,
+      extension,
+      sizeBytes
+    };
+    if (fileType === 'image') {
+      resultInfo.format = imageFormat;
+    }
+    return resultInfo;
+  }
+
   function SaveFileNode(config) {
     RED.nodes.createNode(this, config);
     const node = this;
@@ -81,241 +214,143 @@ module.exports = function (RED) {
         const overwriteEnabled = String(config.overwriteProtection) !== 'false';
         const configType = String(config.fileType || 'auto').toLowerCase();
 
-        // Resolve the three dynamic values
-        const folderPathType = config.folderPathType || 'str';
-        const rawFolder = await evaluateProperty(config.folderPath, folderPathType);
+        const saveOpts = {
+          configType, imageFormat: String(config.imageFormat || 'jpg'),
+          quality, pngCompression, webpOptions, jsonIndent,
+          overwriteEnabled, maxFiles, diskWarnState, node
+        };
 
-        const inputPath = config.inputPath || 'payload';
-        const inputPathType = config.inputPathType || 'msg';
-        let rawInput;
-        if (inputPathType === 'msg') {
-          rawInput = RED.util.getMessageProperty(msg, inputPath);
-        } else if (inputPathType === 'flow') {
-          rawInput = node.context().flow.get(inputPath);
-        } else if (inputPathType === 'global') {
-          rawInput = node.context().global.get(inputPath);
-        }
-        if (rawInput === undefined) {
-          throw new Error('No data found at configured input path.');
-        }
-
-        const filenameType = config.filenameType || 'str';
-        const rawFilename = await evaluateProperty(config.filename, filenameType);
-
-        // Normalize into arrays for batch support
-        const anyArray = Array.isArray(rawFolder) || Array.isArray(rawInput) || Array.isArray(rawFilename);
-        let folders, inputs, filenames, count;
-
-        if (anyArray) {
-          const arrFolder = Array.isArray(rawFolder) ? rawFolder : null;
-          const arrInput = Array.isArray(rawInput) ? rawInput : null;
-          const arrFilename = Array.isArray(rawFilename) ? rawFilename : null;
-          const lengths = [arrFolder, arrInput, arrFilename].filter(Boolean).map(a => a.length);
-          count = Math.min(...lengths);
-
-          if (count === 0) {
-            node.warn('Received empty array — nothing to save.');
-            node.status({ fill: 'yellow', shape: 'ring', text: 'empty array' });
-            done && done();
-            return;
-          }
-          if (new Set(lengths).size > 1) {
-            node.warn(`Array inputs have different lengths (${lengths.join(', ')}). Processing first ${count} items.`);
-          }
-          const scalarNames = [];
-          if (!arrFolder) scalarNames.push('folder');
-          if (!arrInput) scalarNames.push('input');
-          if (!arrFilename) scalarNames.push('filename');
-          if (scalarNames.length > 0) {
-            node.warn(`${scalarNames.join(', ')} not provided as array — using single value for all items.`);
-          }
-
-          folders = arrFolder ? arrFolder.slice(0, count) : Array(count).fill(rawFolder);
-          inputs = arrInput ? arrInput.slice(0, count) : Array(count).fill(rawInput);
-          filenames = arrFilename ? arrFilename.slice(0, count) : Array(count).fill(rawFilename);
-        } else {
-          count = 1;
-          folders = [rawFolder];
-          inputs = [rawInput];
-          filenames = [rawFilename];
-        }
-
-        // Process each item sequentially
-        const results = [];
-        for (let idx = 0; idx < count; idx++) {
-          const folderPath = String(folders[idx] ?? '').trim();
-          if (!folderPath) {
-            throw new Error(`Folder path is empty (item ${idx}).`);
-          }
-          await fs.mkdir(folderPath, { recursive: true });
-
-          const incoming = inputs[idx];
-          if (incoming === undefined) {
-            throw new Error(`No data for item ${idx}.`);
-          }
-
-          const filenameRaw = filenames[idx] !== undefined && filenames[idx] !== null
-            ? String(filenames[idx]).trim()
-            : '';
-          if (/[\\/]/.test(filenameRaw)) {
-            throw new Error(`Filename must not contain path separators (item ${idx}).`);
-          }
-          const parsedName = path.parse(filenameRaw);
-          let baseName = parsedName.name || '';
-          let extFromName = parsedName.ext ? parsedName.ext.replace(/^\./, '') : '';
-
-          // Determine file type and format
-          let imageFormat = String(config.imageFormat || 'jpg').toLowerCase();
-          const extInfo = mapExtension(extFromName);
-
-          let fileType = configType;
-          if (fileType === 'auto' && extInfo?.type) {
-            fileType = extInfo.type;
-            if (extInfo.format) imageFormat = extInfo.format;
-          }
-
-          const inferred = fileType === 'auto'
-            ? await inferFileType(incoming, extInfo)
-            : { type: fileType, format: imageFormat };
-
-          fileType = inferred.type;
-          if (fileType === 'image' && inferred.format) imageFormat = inferred.format;
-          if (fileType === 'image' && extInfo?.format) imageFormat = extInfo.format;
-
-          if (!['image', 'json', 'text', 'binary'].includes(fileType)) {
-            throw new Error(`Unsupported file type: ${fileType}`);
-          }
-
-          // Finalize extension and name
-          let extension = extFromName || defaultExtension(fileType, imageFormat);
-          if (!extension) {
-            throw new Error('Unable to determine file extension.');
-          }
-          if (!baseName) {
-            baseName = defaultBaseName(fileType);
-          }
-          let filename = `${baseName}.${extension}`;
-          let filePath = path.join(folderPath, filename);
-
-          if (overwriteEnabled) {
-            const dirMap = await getCachedDir(folderPath);
-            let counter = 2;
-            while (dirMap.has(filename)) {
-              filename = `${baseName}_${counter}.${extension}`;
-              filePath = path.join(folderPath, filename);
-              counter += 1;
-              if (counter > 1000) {
-                throw new Error('Too many file variations exist in target folder.');
-              }
+        // Store output helper
+        function storeOutput(outputValue) {
+          const outputPath = config.outputPath || 'savedFile';
+          const outputPathType = config.outputPathType || 'msg';
+          try {
+            if (outputPathType === 'msg') {
+              RED.util.setMessageProperty(msg, outputPath, outputValue, true);
+            } else if (outputPathType === 'flow') {
+              node.context().flow.set(outputPath, outputValue);
+            } else if (outputPathType === 'global') {
+              node.context().global.set(outputPath, outputValue);
             }
+          } catch (setErr) {
+            node.warn(`Unable to store output metadata: ${setErr.message}`);
+          }
+        }
+
+        if (config.mode === 'multiple') {
+          // --- Multiple files mode ---
+          const saveConfigType = config.saveConfigType || 'msg';
+          let saveConfig;
+          if (saveConfigType === 'msg') {
+            saveConfig = RED.util.getMessageProperty(msg, config.saveConfig || 'payload');
+          } else {
+            saveConfig = await evaluateProperty(config.saveConfig || 'payload', saveConfigType);
           }
 
-          // Check disk space (skip if 90%+ used)
-          const diskInfo = await getDiskUsageInfo(folderPath, node, diskWarnState);
-          if (diskInfo && diskInfo.usedRatio >= 0.9) {
-            const usedPercent = (diskInfo.usedRatio * 100).toFixed(1);
-            node.warn(`Storage at "${folderPath}" is ${usedPercent}% full. Skipping save to avoid exhausting disk space.`);
-            node.status({ fill: 'yellow', shape: 'ring', text: `disk ${usedPercent}% full` });
+          // Wrap single object in array
+          if (saveConfig && typeof saveConfig === 'object' && !Array.isArray(saveConfig)) {
+            saveConfig = [saveConfig];
+          }
+
+          if (!Array.isArray(saveConfig) || saveConfig.length === 0) {
+            node.warn('Save config is empty or invalid — nothing to save.');
+            node.status({ fill: 'yellow', shape: 'ring', text: 'empty config' });
             done && done();
             return;
           }
 
-          // Prepare data to write
-          let payloadToWrite;
-          let isText = false;
+          const imageField = config.imageField || 'bitmap';
+          const filenameField = config.filenameField || 'filename';
+          const outputDirField = config.outputDirField || 'outputDir';
 
-          if (fileType === 'image') {
-            payloadToWrite = await toImageBuffer(incoming, imageFormat, quality, pngCompression, webpOptions, NodeUtils, node);
-          } else if (fileType === 'json') {
-            if (typeof incoming === 'string') {
-              try {
-                JSON.parse(incoming);
-                payloadToWrite = incoming;
-              } catch {
-                payloadToWrite = JSON.stringify(incoming, null, jsonIndent);
-              }
-            } else {
-              payloadToWrite = JSON.stringify(incoming, null, jsonIndent);
-            }
-            isText = true;
-          } else if (fileType === 'text') {
-            payloadToWrite = incoming === undefined || incoming === null ? '' : String(incoming);
-            isText = true;
-          } else {
-            payloadToWrite = await toBinary(incoming);
-          }
+          const results = [];
+          let skipped = 0;
 
-          if (isText) {
-            await fs.writeFile(filePath, payloadToWrite, 'utf8');
-          } else {
-            await fs.writeFile(filePath, payloadToWrite);
-          }
-          dirCache.get(folderPath)?.set(filename, Date.now());
-
-          const sizeBytes = isText
-            ? Buffer.byteLength(payloadToWrite, 'utf8')
-            : payloadToWrite.length;
-
-          // Enforce max files retention policy
-          if (maxFiles > 0) {
+          for (let idx = 0; idx < saveConfig.length; idx++) {
             try {
-              await enforceMaxFiles(folderPath, maxFiles, dirCache.get(folderPath));
-            } catch (policyErr) {
-              node.warn(`Max files enforcement failed: ${policyErr.message}`);
+              const item = saveConfig[idx];
+              if (!item || typeof item !== 'object') {
+                node.warn(`Item ${idx}: not an object, skipping.`);
+                skipped++;
+                continue;
+              }
+
+              const incoming = item[imageField];
+              if (incoming === undefined) {
+                node.warn(`Item ${idx}: missing "${imageField}" field, skipping.`);
+                skipped++;
+                continue;
+              }
+
+              const folderPath = String(item[outputDirField] ?? '').trim();
+              if (!folderPath) {
+                node.warn(`Item ${idx}: missing or empty "${outputDirField}" field, skipping.`);
+                skipped++;
+                continue;
+              }
+
+              const filenameRaw = item[filenameField] !== undefined && item[filenameField] !== null
+                ? String(item[filenameField]).trim() : '';
+
+              const resultInfo = await saveOneFile(folderPath, incoming, filenameRaw, saveOpts);
+              results.push(resultInfo);
+            } catch (itemErr) {
+              node.warn(`Item ${idx}: ${itemErr.message}`);
+              skipped++;
             }
           }
 
-          if (fileType === 'json' && sizeBytes >= JSON_WARN_BYTES) {
-            const sizeMB = (sizeBytes / (1024 * 1024)).toFixed(1);
-            node.warn(`JSON output is large (${sizeMB} MB); this may impact the event loop and memory usage.`);
+          if (results.length === 0) {
+            throw new Error('All items failed to save.');
           }
 
-          const resultInfo = {
-            path: filePath,
-            filename,
-            type: fileType,
-            extension,
-            sizeBytes
-          };
-          if (fileType === 'image') {
-            resultInfo.format = imageFormat;
-          }
-          results.push(resultInfo);
-        }
+          storeOutput(results);
 
-        // Attach result info for downstream nodes
-        const outputPath = config.outputPath || 'savedFile';
-        const outputPathType = config.outputPathType || 'msg';
-        const outputValue = results.length === 1 ? results[0] : results;
-        try {
-          if (outputPathType === 'msg') {
-            RED.util.setMessageProperty(msg, outputPath, outputValue, true);
-          } else if (outputPathType === 'flow') {
-            node.context().flow.set(outputPath, outputValue);
-          } else if (outputPathType === 'global') {
-            node.context().global.set(outputPath, outputValue);
-          }
-        } catch (setErr) {
-          node.warn(`Unable to store output metadata: ${setErr.message}`);
-        }
+          const elapsed = Date.now() - started;
+          const total = results.length + skipped;
+          const statusText = skipped > 0
+            ? `saved ${results.length}/${total} files (${elapsed}ms)`
+            : `saved ${results.length} files (${elapsed}ms)`;
+          node.status({ fill: 'green', shape: 'dot', text: statusText });
+          NodeUtils.recordPerformanceMetrics(node, msg, { taskMs: elapsed }, elapsed);
 
-        const elapsed = Date.now() - started;
-        if (results.length === 1) {
-          const r = results[0];
-          node.status({
-            fill: 'green',
-            shape: 'dot',
-            text: `saved ${r.filename} (${elapsed}ms)`
-          });
         } else {
-          node.status({
-            fill: 'green',
-            shape: 'dot',
-            text: `saved ${results.length} files (${elapsed}ms)`
-          });
-        }
+          // --- Single file mode ---
+          const folderPathType = config.folderPathType || 'str';
+          const rawFolder = await evaluateProperty(config.folderPath, folderPathType);
 
-        NodeUtils.recordPerformanceMetrics(node, msg, { taskMs: elapsed }, elapsed);
+          const inputPath = config.inputPath || 'payload';
+          const inputPathType = config.inputPathType || 'msg';
+          let rawInput;
+          if (inputPathType === 'msg') {
+            rawInput = RED.util.getMessageProperty(msg, inputPath);
+          } else if (inputPathType === 'flow') {
+            rawInput = node.context().flow.get(inputPath);
+          } else if (inputPathType === 'global') {
+            rawInput = node.context().global.get(inputPath);
+          }
+          if (rawInput === undefined) {
+            throw new Error('No data found at configured input path.');
+          }
+
+          const filenameType = config.filenameType || 'str';
+          const rawFilename = await evaluateProperty(config.filename, filenameType);
+
+          const folderPath = String(rawFolder ?? '').trim();
+          if (!folderPath) {
+            throw new Error('Folder path is empty.');
+          }
+
+          const filenameRaw = rawFilename !== undefined && rawFilename !== null
+            ? String(rawFilename).trim() : '';
+
+          const resultInfo = await saveOneFile(folderPath, rawInput, filenameRaw, saveOpts);
+          storeOutput(resultInfo);
+
+          const elapsed = Date.now() - started;
+          node.status({ fill: 'green', shape: 'dot', text: `saved ${resultInfo.filename} (${elapsed}ms)` });
+          NodeUtils.recordPerformanceMetrics(node, msg, { taskMs: elapsed }, elapsed);
+        }
 
         send(msg);
         done && done();
@@ -363,15 +398,6 @@ function defaultBaseName(type) {
     case 'json': return `data_${timestamp}`;
     case 'text': return `text_${timestamp}`;
     default: return `file_${timestamp}`;
-  }
-}
-
-async function fileExists(p) {
-  try {
-    await fs.access(p);
-    return true;
-  } catch {
-    return false;
   }
 }
 

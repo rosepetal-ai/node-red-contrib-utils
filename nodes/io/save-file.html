@@ -4,12 +4,23 @@
         color: '#87CEEB',
         defaults: {
             name: { value: "" },
+            mode: { value: "single" },
             inputPath: { value: "payload" },
             inputPathType: { value: "msg" },
-            folderPath: { value: "", required: true },
+            folderPath: {
+                value: "",
+                validate: function (v) {
+                    return this.mode === 'multiple' || (v && v.trim().length > 0);
+                }
+            },
             folderPathType: { value: "str" },
             filename: { value: "" },
             filenameType: { value: "str" },
+            saveConfig: { value: "payload" },
+            saveConfigType: { value: "msg" },
+            imageField: { value: "bitmap" },
+            filenameField: { value: "filename" },
+            outputDirField: { value: "outputDir" },
             fileType: { value: "auto" },
             imageFormat: { value: "jpg" },
             imageQuality: { value: 90 },
@@ -55,6 +66,12 @@
                 default: 'str',
                 types: filenameTypes,
                 typeField: "#node-input-filenameType"
+            });
+
+            $("#node-input-saveConfig").typedInput({
+                default: 'msg',
+                types: ['msg', 'flow', 'global'],
+                typeField: "#node-input-saveConfigType"
             });
 
             $("#node-input-outputPath").typedInput({
@@ -109,6 +126,16 @@
             fileTypeField.on("change", toggleFields);
             imageFormatField.on("change", toggleImageFormatFields);
             toggleFields();
+
+            // Mode toggle: show/hide single vs multiple fields
+            const modeField = $("#node-input-mode");
+            function toggleMode() {
+                const multi = modeField.val() === 'multiple';
+                $(".savefile-single-mode").toggle(!multi);
+                $(".savefile-multiple-mode").toggle(multi);
+            }
+            modeField.on("change", toggleMode);
+            toggleMode();
         }
     });
 </script>
@@ -120,28 +147,57 @@
     </div>
 
     <div class="form-row">
+        <label for="node-input-mode"><i class="fa fa-copy"></i> Mode</label>
+        <select id="node-input-mode">
+            <option value="single">Single file</option>
+            <option value="multiple">Multiple files</option>
+        </select>
+    </div>
+
+    <div class="form-row savefile-single-mode">
         <label for="node-input-inputPath"><i class="fa fa-sign-in"></i> Input</label>
         <input type="text" id="node-input-inputPath" style="width: 70%;">
         <input type="hidden" id="node-input-inputPathType">
     </div>
-    <div class="form-tips">
-        <b>Input:</b> Location of the data to save. Defaults to <code>msg.payload</code>. Can be an array for batch saving.
+    <div class="form-tips savefile-single-mode">
+        <b>Input:</b> Location of the data to save. Defaults to <code>msg.payload</code>.
+    </div>
+
+    <div class="form-row savefile-multiple-mode">
+        <label for="node-input-saveConfig"><i class="fa fa-list"></i> Save Config</label>
+        <input type="text" id="node-input-saveConfig" style="width: 70%;">
+        <input type="hidden" id="node-input-saveConfigType">
+    </div>
+    <div class="form-tips savefile-multiple-mode">
+        Array of objects (or single object). Each object should contain the fields specified below.
+    </div>
+    <div class="form-row savefile-multiple-mode">
+        <label for="node-input-imageField"><i class="fa fa-picture-o"></i> Image field</label>
+        <input type="text" id="node-input-imageField" placeholder="bitmap">
+    </div>
+    <div class="form-row savefile-multiple-mode">
+        <label for="node-input-filenameField"><i class="fa fa-file-text-o"></i> Filename field</label>
+        <input type="text" id="node-input-filenameField" placeholder="filename">
+    </div>
+    <div class="form-row savefile-multiple-mode">
+        <label for="node-input-outputDirField"><i class="fa fa-folder-open"></i> Output dir field</label>
+        <input type="text" id="node-input-outputDirField" placeholder="outputDir">
     </div>
 
     <hr>
 
-    <div class="form-row">
+    <div class="form-row savefile-single-mode">
         <label for="node-input-folderPath"><i class="fa fa-folder-open"></i> Folder</label>
         <input type="text" id="node-input-folderPath" style="width: 70%;" placeholder="/tmp/output">
         <input type="hidden" id="node-input-folderPathType">
     </div>
 
-    <div class="form-row">
+    <div class="form-row savefile-single-mode">
         <label for="node-input-filename"><i class="fa fa-file-text-o"></i> Filename</label>
         <input type="text" id="node-input-filename" style="width: 70%;" placeholder="optional (auto timestamp)">
         <input type="hidden" id="node-input-filenameType">
     </div>
-    <div class="form-tips">
+    <div class="form-tips savefile-single-mode">
         <b>Filename:</b> Leave blank to auto-generate; omit slashes. Extension is added automatically unless you provide one.
     </div>
 
@@ -236,7 +292,7 @@
         <input type="hidden" id="node-input-outputPathType">
     </div>
     <div class="form-tips">
-        <b>Result:</b> Stores <code>{path, filename, type, extension, sizeBytes[, format]}</code> for downstream nodes. Returns an array of results when batch saving. Defaults to <code>msg.savedFile</code>.
+        <b>Result:</b> Stores <code>{path, filename, type, extension, sizeBytes[, format]}</code> for downstream nodes. Returns an array of results in multiple mode. Defaults to <code>msg.savedFile</code>.
     </div>
 </script>
 
@@ -245,25 +301,44 @@
 
     <h3>Inputs</h3>
     <dl class="message-properties">
-        <dt>payload (default) <span class="property-type">any | array</span></dt>
+        <dt>payload (default) <span class="property-type">any</span></dt>
         <dd>Data to write. Auto-detection treats raw image objects and encoded image buffers as images; objects/arrays as JSON; strings as text; buffers as binary.</dd>
     </dl>
 
-    <h3>Batch mode</h3>
-    <p>Input, Folder, and Filename can each resolve to an array. When any of them is an array, the node saves one file per index:</p>
+    <h3>Mode</h3>
+    <p>The <b>Mode</b> dropdown controls how the node operates:</p>
     <ul>
-        <li>All arrays, equal length — one save per element, no warnings.</li>
-        <li>Arrays of different lengths — processes the minimum length and warns.</li>
-        <li>Mix of arrays and scalars — the scalar value is reused for every item and warns.</li>
+        <li><b>Single file</b> — saves one file per message using the Input, Folder, and Filename fields (default behavior).</li>
+        <li><b>Multiple files</b> — reads an array of objects from <b>Save Config</b> and saves one file per object. Each object should contain fields for the image/data, filename, and output directory. The field names are configurable via <b>Image field</b>, <b>Filename field</b>, and <b>Output dir field</b>.</li>
     </ul>
-    <p>In batch mode, the result output is an array of result objects instead of a single object.</p>
+
+    <h4>Multiple mode details</h4>
+    <ul>
+        <li>A single object (not wrapped in an array) is treated as a one-item batch.</li>
+        <li>If an item is missing a required field, the node warns and skips that item — other items still save.</li>
+        <li>If all items fail, the node reports an error.</li>
+        <li>The result output is always an array of result objects.</li>
+        <li>Status shows <code>saved N files</code> or <code>saved N/M files</code> if some were skipped.</li>
+    </ul>
 
     <h3>Properties</h3>
     <dl class="message-properties">
+        <dt>Mode <span class="property-type">enum</span></dt>
+        <dd>Single file or Multiple files.</dd>
+        <dt>Input <span class="property-type">msg | flow | global</span></dt>
+        <dd>(Single mode) Location of the data to save. Defaults to <code>msg.payload</code>.</dd>
+        <dt>Save Config <span class="property-type">msg | flow | global</span></dt>
+        <dd>(Multiple mode) Array of objects, each describing one file to save.</dd>
+        <dt>Image field <span class="property-type">string</span></dt>
+        <dd>(Multiple mode) Key name for the data/image in each object. Default: <code>bitmap</code>.</dd>
+        <dt>Filename field <span class="property-type">string</span></dt>
+        <dd>(Multiple mode) Key name for the filename in each object. Default: <code>filename</code>.</dd>
+        <dt>Output dir field <span class="property-type">string</span></dt>
+        <dd>(Multiple mode) Key name for the output directory in each object. Default: <code>outputDir</code>.</dd>
         <dt>Folder <span class="property-type">string | env | msg | flow | global</span></dt>
-        <dd>Destination directory. Created automatically if missing. Can resolve to an array of paths for batch saving.</dd>
+        <dd>(Single mode) Destination directory. Created automatically if missing.</dd>
         <dt>Filename <span class="property-type">string | msg | flow | global</span></dt>
-        <dd>Optional name without slashes. When blank, a timestamped name is generated. If you include an extension here it is used. Can resolve to an array of names for batch saving.</dd>
+        <dd>(Single mode) Optional name without slashes. When blank, a timestamped name is generated.</dd>
         <dt>File Type <span class="property-type">enum</span></dt>
         <dd>Force saving as image, JSON, text, or binary, or let the node auto-detect from data/extension.</dd>
         <dt>Image Format / Quality / PNG Compression <span class="property-type">enum/number/number</span></dt>
@@ -286,6 +361,6 @@
         <li>Image inputs accept encoded buffers or raw objects {data, width, height, channels, colorSpace}.</li>
         <li>JSON inputs are pretty-printed; JSON strings are preserved if already valid.</li>
         <li>When overwrite protection is enabled, a numeric suffix is appended if the target file exists.</li>
-        <li>Batch saves are processed sequentially to ensure correct overwrite protection and max-files enforcement.</li>
+        <li>In multiple mode, saves are processed sequentially to ensure correct overwrite protection and max-files enforcement.</li>
     </ul>
 </script>
