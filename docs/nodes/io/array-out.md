@@ -1,3 +1,18 @@
+---
+title: "Array-Out"
+description: "Assemble ordered arrays from parallel data streams with timeout protection for @rosepetal/node-red-contrib-utils."
+head:
+  - - meta
+    - name: "keywords"
+      content: "array, assemble, collect, timeout, parallel, node-red, rosepetal"
+  - - meta
+    - property: "og:title"
+      content: "Array-Out - @rosepetal/node-red-contrib-utils"
+  - - meta
+    - property: "og:description"
+      content: "Assemble ordered arrays from parallel data streams with timeout protection"
+---
+
 # Array-Out Node
 
 ## Purpose & Use Cases
@@ -7,7 +22,7 @@ The `array-out` node serves as the collection point for multiple `array-in` node
 **Real-World Applications:**
 - **Batch Image Processing**: Assemble multiple images for simultaneous operations
 - **Multi-Camera Synchronization**: Collect frames from multiple cameras in sequence
-- **Parallel Pipeline Merging**: Combine results from parallel processing workflows  
+- **Parallel Pipeline Merging**: Combine results from parallel processing workflows
 - **Data Aggregation**: Merge processed data from multiple sources
 - **Quality Control**: Collect inspection results from multiple checkpoints
 
@@ -43,7 +58,7 @@ Messages from `array-in` nodes containing:
   [outputPath]: [data0, null, data2, ...],  // Partial array in configured location
   meta: {
     timeout: true,                     // Timeout flag
-    missingPositions: [1, 4],         // Positions that didn't arrive  
+    missingPositions: [1, 4],         // Positions that didn't arrive
     collectedPositions: [0, 2, 3],    // Positions that were collected
     expectedCount: 5,                 // Number expected
     collectedCount: 3,                // Number actually collected
@@ -129,7 +144,7 @@ Collect quality control results with extended timeout.
 ### Timeout Issues
 - **Issue**: Frequent timeouts preventing array completion
 - **Causes**: Slow upstream processing, network delays, missing data
-- **Solutions**: 
+- **Solutions**:
   - Increase timeout value for slow processes
   - Add debug nodes to identify bottlenecks
   - Implement fallback logic using output 2

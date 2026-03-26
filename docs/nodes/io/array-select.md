@@ -1,3 +1,18 @@
+---
+title: "Array-Select"
+description: "Select array elements using Python-like slicing syntax for @rosepetal/node-red-contrib-utils."
+head:
+  - - meta
+    - name: "keywords"
+      content: "array, select, slice, filter, index, range, node-red, rosepetal"
+  - - meta
+    - property: "og:title"
+      content: "Array-Select - @rosepetal/node-red-contrib-utils"
+  - - meta
+    - property: "og:description"
+      content: "Select array elements using Python-like slicing syntax"
+---
+
 # Array-Select Node
 
 ## Purpose & Use Cases

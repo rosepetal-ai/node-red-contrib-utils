@@ -1,3 +1,18 @@
+---
+title: "Queue"
+description: "Buffer and rate-limit messages with FIFO ordering, timeout, and overflow protection for @rosepetal/node-red-contrib-utils."
+head:
+  - - meta
+    - name: "keywords"
+      content: "queue, buffer, throttle, rate-limit, FIFO, timeout, overflow, node-red, rosepetal"
+  - - meta
+    - property: "og:title"
+      content: "Queue - @rosepetal/node-red-contrib-utils"
+  - - meta
+    - property: "og:description"
+      content: "Buffer and rate-limit messages with FIFO ordering, timeout, and overflow protection"
+---
+
 # Queue Node
 
 ## Purpose & Use Cases

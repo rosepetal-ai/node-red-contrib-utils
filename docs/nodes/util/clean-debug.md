@@ -1,3 +1,18 @@
+---
+title: "Clean Debug"
+description: "Debug node that sanitizes heavy payloads to keep the editor sidebar responsive for @rosepetal/node-red-contrib-utils."
+head:
+  - - meta
+    - name: "keywords"
+      content: "debug, sanitize, buffer, image, base64, sidebar, node-red, rosepetal"
+  - - meta
+    - property: "og:title"
+      content: "Clean Debug - @rosepetal/node-red-contrib-utils"
+  - - meta
+    - property: "og:description"
+      content: "Debug node that sanitizes heavy payloads to keep the editor sidebar responsive"
+---
+
 # Clean Debug Node
 
 ## Purpose & Use Cases

@@ -1,3 +1,18 @@
+---
+title: "Block Detect"
+description: "Event loop watchdog that detects blocking operations and alerts when Node-RED becomes sluggish for @rosepetal/node-red-contrib-utils."
+head:
+  - - meta
+    - name: "keywords"
+      content: "event loop, block, watchdog, monitor, performance, latency, node-red, rosepetal"
+  - - meta
+    - property: "og:title"
+      content: "Block Detect - @rosepetal/node-red-contrib-utils"
+  - - meta
+    - property: "og:description"
+      content: "Event loop watchdog that detects blocking operations and alerts when Node-RED becomes sluggish"
+---
+
 # Block Detect Node
 
 ## Purpose & Use Cases

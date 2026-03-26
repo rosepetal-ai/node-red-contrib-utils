@@ -1,3 +1,18 @@
+---
+title: "Promise Reader"
+description: "Resolve an array of promises and merge results into a single message for @rosepetal/node-red-contrib-utils."
+head:
+  - - meta
+    - name: "keywords"
+      content: "promise, async, resolve, merge, parallel, performance, node-red, rosepetal"
+  - - meta
+    - property: "og:title"
+      content: "Promise Reader - @rosepetal/node-red-contrib-utils"
+  - - meta
+    - property: "og:description"
+      content: "Resolve an array of promises and merge results into a single message"
+---
+
 # Promise Reader Node
 
 ## Purpose & Use Cases

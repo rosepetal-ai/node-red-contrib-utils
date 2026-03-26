@@ -1,3 +1,18 @@
+---
+title: "Array-In"
+description: "Collect and tag data with position metadata for ordered array assembly for @rosepetal/node-red-contrib-utils."
+head:
+  - - meta
+    - name: "keywords"
+      content: "array, collect, position, batch, parallel, node-red, rosepetal"
+  - - meta
+    - property: "og:title"
+      content: "Array-In - @rosepetal/node-red-contrib-utils"
+  - - meta
+    - property: "og:description"
+      content: "Collect and tag data with position metadata for ordered array assembly"
+---
+
 # Array-In Node
 
 ## Purpose & Use Cases
@@ -37,7 +52,7 @@ The node adds metadata to the message and mirrors the extracted data into the pa
 
 ### Input From
 - **Default**: `msg.payload`
-- **Options**: 
+- **Options**:
   - `msg.*` - Read from message property
   - `flow.*` - Read from flow context
   - `global.*` - Read from global context
