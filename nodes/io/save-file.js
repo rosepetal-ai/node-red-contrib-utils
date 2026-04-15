@@ -40,7 +40,7 @@ module.exports = function (RED) {
    */
   async function saveOneFile(folderPath, incoming, filenameRaw, opts) {
     const { configType, imageFormat: defaultImageFormat, quality, pngCompression, webpOptions,
-            jsonIndent, overwriteEnabled, maxFiles, diskWarnState, node } = opts;
+            jsonIndent, overwriteEnabled, maxFiles, diskWarnState, diskThreshold, node } = opts;
 
     await fs.mkdir(folderPath, { recursive: true });
 
@@ -97,9 +97,9 @@ module.exports = function (RED) {
       }
     }
 
-    // Check disk space (skip if 90%+ used)
-    const diskInfo = await getDiskUsageInfo(folderPath, node, diskWarnState);
-    if (diskInfo && diskInfo.usedRatio >= 0.9) {
+    // Check disk space
+    const diskInfo = diskThreshold > 0 ? await getDiskUsageInfo(folderPath, node, diskWarnState) : null;
+    if (diskInfo && diskInfo.usedRatio >= diskThreshold) {
       const usedPercent = (diskInfo.usedRatio * 100).toFixed(1);
       throw new Error(`Storage at "${folderPath}" is ${usedPercent}% full. Skipping save to avoid exhausting disk space.`);
     }
@@ -214,10 +214,15 @@ module.exports = function (RED) {
         const overwriteEnabled = String(config.overwriteProtection) !== 'false';
         const configType = String(config.fileType || 'auto').toLowerCase();
 
+        const diskThresholdPct = parseInt(config.diskThreshold, 10);
+        const diskThreshold = (Number.isInteger(diskThresholdPct) && diskThresholdPct > 0 && diskThresholdPct <= 100)
+          ? diskThresholdPct / 100
+          : 0;
+
         const saveOpts = {
           configType, imageFormat: String(config.imageFormat || 'jpg'),
           quality, pngCompression, webpOptions, jsonIndent,
-          overwriteEnabled, maxFiles, diskWarnState, node
+          overwriteEnabled, maxFiles, diskWarnState, diskThreshold, node
         };
 
         // Store output helper

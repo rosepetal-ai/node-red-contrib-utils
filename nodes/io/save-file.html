@@ -34,6 +34,7 @@
             overwriteProtection: { value: "true" },
             maxFiles: { value: "" },
             maxFilesType: { value: "num" },
+            diskThreshold: { value: 90 },
             outputPath: { value: "savedFile" },
             outputPathType: { value: "msg" }
         },
@@ -309,6 +310,12 @@
     </div>
 
     <div class="form-row">
+        <label for="node-input-diskThreshold"><i class="fa fa-hdd-o"></i> Disk Limit</label>
+        <input type="number" id="node-input-diskThreshold" min="0" max="100" step="1" style="width: 70px;">
+        <span style="margin-left: 10px; color: #666;">% full — skip saving above this. 0 disables check.</span>
+    </div>
+
+    <div class="form-row">
         <label for="node-input-outputPath"><i class="fa fa-sign-out"></i> Result to</label>
         <input type="text" id="node-input-outputPath" style="width: 70%;">
         <input type="hidden" id="node-input-outputPathType">
@@ -373,6 +380,8 @@
         <dd>By default the node avoids overwriting existing files, appending a numeric suffix when needed.</dd>
         <dt>Max Files <span class="property-type">num | msg | flow | global</span></dt>
         <dd>Maximum number of files to keep in the folder. After saving, the oldest files (by modification time) are removed so the total does not exceed this limit. Set to 0 or leave blank to keep all files.</dd>
+        <dt>Disk Limit <span class="property-type">number</span></dt>
+        <dd>Percentage of disk usage above which saving is skipped to avoid exhausting disk space. Default is 90%. Set to 0 to disable the check.</dd>
         <dt>Result to <span class="property-type">msg | flow | global</span></dt>
         <dd>Where to store a summary of the saved file: <code>{ path, filename, type, extension, sizeBytes, format? }</code>.</dd>
     </dl>
