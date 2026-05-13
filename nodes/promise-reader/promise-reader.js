@@ -53,8 +53,8 @@ module.exports = function(RED) {
                 node.send(msg)
                 return;
             }
-            const allArePromises = promises.every(promise => 
-                promise instanceof Promise || 
+            const allArePromises = promises.every(promise =>
+                promise instanceof Promise ||
                 (promise && typeof promise.then === 'function' && typeof promise.catch === 'function')
             );
             if (!allArePromises) {
@@ -62,8 +62,9 @@ module.exports = function(RED) {
                 return;
             }
 
+            const nodeStartTime = new Date();
             let aggregatedPerformance = {
-                startTime: null,
+                startTime: nodeStartTime,
                 endTime: null
             };
 
@@ -73,11 +74,13 @@ module.exports = function(RED) {
                         if (value && value.performance) {
                             const performanceEntries = extractPerformanceEntries(value.performance);
                             performanceEntries.forEach(entry => {
-                                if (aggregatedPerformance.startTime === null || entry.startTime < aggregatedPerformance.startTime) {
-                                    aggregatedPerformance.startTime = entry.startTime;
+                                const entryStart = new Date(entry.startTime);
+                                const entryEnd = new Date(entry.endTime);
+                                if (!isNaN(entryStart) && entryStart < aggregatedPerformance.startTime) {
+                                    aggregatedPerformance.startTime = entryStart;
                                 }
-                                if (aggregatedPerformance.endTime === null || entry.endTime > aggregatedPerformance.endTime) {
-                                    aggregatedPerformance.endTime = entry.endTime;
+                                if (!isNaN(entryEnd) && (aggregatedPerformance.endTime === null || entryEnd > aggregatedPerformance.endTime)) {
+                                    aggregatedPerformance.endTime = entryEnd;
                                 }
                             });
                         }
@@ -96,11 +99,11 @@ module.exports = function(RED) {
                         }
                     });
 
-                    if (aggregatedPerformance.startTime !== null && aggregatedPerformance.endTime !== null) {
-                        aggregatedPerformance.milliseconds = new Date(aggregatedPerformance.endTime) - new Date(aggregatedPerformance.startTime);
-                    } else {
-                        aggregatedPerformance.milliseconds = null;
+                    const nodeEndTime = new Date();
+                    if (aggregatedPerformance.endTime === null || nodeEndTime > aggregatedPerformance.endTime) {
+                        aggregatedPerformance.endTime = nodeEndTime;
                     }
+                    aggregatedPerformance.milliseconds = aggregatedPerformance.endTime - aggregatedPerformance.startTime;
 
                     msg.performance = msg.performance || {};
                     msg.performance[node.name] = aggregatedPerformance;
