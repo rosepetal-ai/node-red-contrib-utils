@@ -190,7 +190,7 @@
         <input type="hidden" id="node-input-saveConfigType">
     </div>
     <div class="form-tips savefile-multiple-mode">
-        Array of objects (or single object). Each object must contain the image field. Filename and output dir can come from each item or be set globally via msg/flow/global.
+        Array of objects (or single object) — defaults to <code>msg.payload</code>. Each object must contain the data field named by <b>Image field</b>. Filename and output dir can come from each item or be shared via str/msg/flow/global.
     </div>
     <div class="form-row savefile-multiple-mode">
         <label for="node-input-imageField"><i class="fa fa-picture-o"></i> Image field</label>
@@ -342,11 +342,20 @@
     </ul>
 
     <h4>Multiple mode details</h4>
+    <p>Example message with default settings (<b>Save Config</b> = <code>msg.payload</code>):</p>
+    <pre>[
+  { "bitmap": &lt;image or data&gt;, "filename": "crop_1.png", "outputDir": "/data/out" },
+  { "bitmap": &lt;image or data&gt;, "filename": "crop_2.png", "outputDir": "/data/out" }
+]</pre>
     <ul>
+        <li>Despite its name, the <b>Image field</b> accepts anything single mode does (raw image, encoded buffer, JSON, text, binary); auto-detection runs per item.</li>
         <li>A single object (not wrapped in an array) is treated as a one-item batch.</li>
-        <li>If an item is missing a required field, the node warns and skips that item — other items still save.</li>
-        <li>If all items fail, the node reports an error.</li>
-        <li>The result output is always an array of result objects.</li>
+        <li>Blank filenames get a per-item timestamped name; an extension in the filename drives type/format detection.</li>
+        <li>Items can target different directories; each directory is created if missing.</li>
+        <li>File Type, Image Format, quality, JSON Indent, Overwrite, Max Files, and Disk Limit are node-level settings applied to every item.</li>
+        <li>Items are saved sequentially so overwrite protection and Max Files enforcement stay consistent.</li>
+        <li>If an item is missing a required field, the node warns and skips that item — other items still save. If all items fail, the node reports an error.</li>
+        <li>The result output is an array of result objects for saved files only — skipped items are absent, so don't assume 1:1 correspondence with the input array.</li>
         <li>Status shows <code>saved N files</code> or <code>saved N/M files</code> if some were skipped.</li>
     </ul>
 
@@ -357,13 +366,13 @@
         <dt>Input <span class="property-type">msg | flow | global</span></dt>
         <dd>(Single mode) Location of the data to save. Defaults to <code>msg.payload</code>.</dd>
         <dt>Save Config <span class="property-type">msg | flow | global</span></dt>
-        <dd>(Multiple mode) Array of objects, each describing one file to save.</dd>
+        <dd>(Multiple mode) Array of objects, each describing one file to save. Defaults to <code>msg.payload</code>. An empty or invalid config warns and passes the message through without saving.</dd>
         <dt>Image field <span class="property-type">string</span></dt>
-        <dd>(Multiple mode) Key name for the data/image in each object. Default: <code>bitmap</code>.</dd>
-        <dt>Filename <span class="property-type">item | msg | flow | global</span></dt>
-        <dd>(Multiple mode) When set to <b>Item field</b>, reads the filename from each object using the specified key (default: <code>filename</code>). When set to msg/flow/global, uses that single value for all items.</dd>
-        <dt>Output dir <span class="property-type">item | msg | flow | global</span></dt>
-        <dd>(Multiple mode) When set to <b>Item field</b>, reads the output directory from each object using the specified key (default: <code>outputDir</code>). When set to msg/flow/global, uses that single directory for all items.</dd>
+        <dd>(Multiple mode) Key name for the data in each object. Default: <code>bitmap</code>. Accepts any supported data type, not only images.</dd>
+        <dt>Filename <span class="property-type">item | str | msg | flow | global</span></dt>
+        <dd>(Multiple mode) When set to <b>Item field</b>, reads the filename from each object using the specified key (default: <code>filename</code>). Otherwise resolves one shared value used for all items.</dd>
+        <dt>Output dir <span class="property-type">item | str | msg | flow | global</span></dt>
+        <dd>(Multiple mode) When set to <b>Item field</b>, reads the output directory from each object using the specified key (default: <code>outputDir</code>). Otherwise resolves one shared directory used for all items.</dd>
         <dt>Folder <span class="property-type">string | env | msg | flow | global</span></dt>
         <dd>(Single mode) Destination directory. Created automatically if missing.</dd>
         <dt>Filename <span class="property-type">string | msg | flow | global</span></dt>

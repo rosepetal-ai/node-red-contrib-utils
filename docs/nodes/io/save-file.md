@@ -39,12 +39,24 @@ Write incoming data to disk as an image, JSON, text, or binary file. The node ca
 ### Multiple Files Mode
 Save several files from a single message by switching to *Multiple* mode.
 
-- **Save Config** (*msg | flow | global*) -- Path to an array (or single object) of items to save. Each item is an object containing the image/data and per-file metadata. A single object is automatically wrapped in an array.
-- **Image Field** -- Property name within each item that holds the data to save (default `bitmap`).
-- **Filename Field** (*item | msg | flow | global*) -- Where to read the filename for each file. When set to `item`, the filename is read from each array element; otherwise a shared value is resolved once from the selected source.
-- **Output Dir Field** (*item | msg | flow | global*) -- Where to read the output directory for each file. Same resolution logic as the filename field.
+- **Save Config** (*msg | flow | global*) -- Path to an array of items to save (default `msg.payload`). A single object is automatically wrapped in a one-item array. An empty or invalid config logs a warning and passes the message through without saving.
+- **Image Field** -- Property name within each item that holds the data to save (default `bitmap`). Despite the name, it accepts anything single mode does -- raw image objects, encoded buffers, JSON, text, or binary -- with auto-detection applied per item.
+- **Filename Field** (*item | str | msg | flow | global*) -- Where to read the filename for each file. When set to `item`, it is read from each array element (default key `filename`); otherwise a shared value is resolved once from the selected source. Blank names get a per-item timestamped default; an extension in the name drives type/format detection, as in single mode.
+- **Output Dir Field** (*item | str | msg | flow | global*) -- Where to read the output directory for each file, with the same resolution logic. Items can target different folders; each folder is created if missing.
 
-The output metadata is an array of result objects, one per saved file.
+Example message with all defaults (*Save Config* = `msg.payload`):
+
+```js
+msg.payload = [
+  { bitmap: <buffer|raw image>, filename: "crop_1.png", outputDir: "/data/out" },
+  { bitmap: <buffer|raw image>, filename: "crop_2.png", outputDir: "/data/out" }
+]
+```
+
+Notes:
+- File Type, Image Format, quality/compression options, JSON Indent, Overwrite protection, Max Files, and the Disk Limit are node-level settings applied to **every** item; the only per-item way to vary the format is the filename extension.
+- Items are saved sequentially (not in parallel) so overwrite protection and Max Files enforcement stay consistent.
+- The output metadata is an array of result objects for the **saved** files only -- skipped items are absent, so do not assume 1:1 correspondence with the input array.
 
 ## Supported Image Formats
 
@@ -62,7 +74,7 @@ The output metadata is an array of result objects, one per saved file.
 - JSON inputs are pretty-printed; valid JSON strings are kept as-is.
 - Text mode writes stringified content; binary mode writes buffers directly (or stringified when not a buffer).
 - When overwrite protection is enabled, the node keeps adding `_<n>` until a free filename is found.
-- Disk usage is checked before each write; saves are skipped when storage exceeds 90% capacity.
+- Disk usage is checked before each write; saves are skipped when usage exceeds the configured *Disk Limit* (default 90%, 0 disables the check).
 - In multiple mode, failures on individual items are logged as warnings and skipped; the node only errors if all items fail.
 
 ## Status
