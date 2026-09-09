@@ -4,6 +4,8 @@
  */
 
 module.exports = function (RED) {
+  const NodeUtils = require('../../lib/node-utils.js')(RED);
+
   function RateLimitNode(config) {
     RED.nodes.createNode(this, config);
     const node = this;
@@ -91,44 +93,31 @@ module.exports = function (RED) {
       };
     }
 
-    function resolveConfigValue(type, value, msg) {
+    /* All property / context access is async so async context stores are supported. */
+    async function resolveConfigValue(type, value, msg) {
       if (type === 'num') {
         return parseFloat(value);
       }
-      return RED.util.evaluateNodeProperty(value, type, node, msg);
+      return NodeUtils.evaluateProperty(node, value, type, msg);
     }
 
     function readTimestamp(msg) {
-      if (node.timestampPathType === 'msg') {
-        return RED.util.getMessageProperty(msg, node.timestampPath);
-      } else if (node.timestampPathType === 'flow') {
-        return node.context().flow.get(node.timestampPath);
-      } else if (node.timestampPathType === 'global') {
-        return node.context().global.get(node.timestampPath);
-      }
-      return undefined;
+      return NodeUtils.getProperty(node, node.timestampPathType, node.timestampPath, msg);
     }
 
     function attachTimingData(msg, timingData) {
-      if (!node.outputPath) return;
-
-      if (node.outputPathType === 'msg') {
-        RED.util.setMessageProperty(msg, node.outputPath, timingData, true);
-      } else if (node.outputPathType === 'flow') {
-        node.context().flow.set(node.outputPath, timingData);
-      } else if (node.outputPathType === 'global') {
-        node.context().global.set(node.outputPath, timingData);
-      }
+      if (!node.outputPath) return Promise.resolve();
+      return NodeUtils.setProperty(node, node.outputPathType, node.outputPath, timingData, msg);
     }
 
     /* ────────────────────────────
        ░░ 4.  Input handler       ░░
        ──────────────────────────── */
-    node.on('input', function (msg, send, done) {
+    node.on('input', async function (msg, send, done) {
       try {
         // 4.1 Resolve interval and window size (may be dynamic per-message)
-        var interval = resolveConfigValue(node.intervalType, node.intervalValue, msg);
-        var windowMs = resolveConfigValue(node.windowSizeType, node.windowSizeValue, msg);
+        var interval = await resolveConfigValue(node.intervalType, node.intervalValue, msg);
+        var windowMs = await resolveConfigValue(node.windowSizeType, node.windowSizeValue, msg);
 
         // 4.2 Validate resolved values
         if (isNaN(interval) || interval < 0) {
@@ -143,7 +132,7 @@ module.exports = function (RED) {
         }
 
         // 4.3 Read and parse timestamp
-        var rawTimestamp = readTimestamp(msg);
+        var rawTimestamp = await readTimestamp(msg);
         var currentTs = parseTimestamp(rawTimestamp);
         if (isNaN(currentTs)) {
           node.warn('Invalid timestamp: ' + rawTimestamp);
@@ -159,7 +148,7 @@ module.exports = function (RED) {
         var timingData = computeTimingData(currentTs);
 
         // 4.6 Attach timing data to message (both outputs)
-        attachTimingData(msg, timingData);
+        await attachTimingData(msg, timingData);
 
         // 4.7 Rate limit decision
         if (timingData.timeBetween === -1 || timingData.timeBetween >= interval) {

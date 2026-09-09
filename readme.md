@@ -50,6 +50,15 @@ All node types are prefixed with `rp-` to avoid collisions with other packages. 
 | **[rp-clean-debug](docs/nodes/util/clean-debug.md)** | Debug output that sanitizes large payloads to keep the sidebar responsive. |
 | **[rp-block-detect](docs/nodes/util/block-detect.md)** | Event loop delay watchdog with live status and log warnings. |
 
+## Non-blocking by design
+
+Every node in this package is asynchronous end to end so the Node-RED event loop is never blocked:
+
+- Filesystem access uses `fs.promises` and streams only; there are no `*Sync` calls on the main thread.
+- Image encoding runs on Sharp's thread pool. Pure-JavaScript pixel work (BGR/RGB reordering, raw BMP and PNG encoding) runs on a small worker-thread pool in `lib/cpu-pool.js` (one worker kept warm, up to `min(4, cores - 1)`, override with `RP_CPU_WORKERS`). Large images are handed to the workers through shared memory with a time-budgeted copy, and results come back with zero copies.
+- `flow` / `global` context is read and written through Node-RED's asynchronous context API, so asynchronous context stores are supported.
+- Debug sanitisation is bounded (depth, key, array and string-sample limits) and never deep-clones the message.
+
 ## Project Structure
 
 ```
@@ -59,7 +68,7 @@ node-red-contrib-utils/
 │   ├── io/              # Array, queue, save-file nodes
 │   ├── util/            # clean-debug, block-detect
 │   └── promise-reader/  # promise-reader node
-├── lib/                 # Shared utilities
+├── lib/                 # Shared utilities (node-utils, worker-thread CPU pool)
 └── assets/              # Documentation assets
 ```
 

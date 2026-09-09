@@ -4,6 +4,8 @@
  */
 
 module.exports = function(RED) {
+  const NodeUtils = require('../../lib/node-utils.js')(RED);
+
   function ArraySelectNode(config) {
     RED.nodes.createNode(this, config);
     const node = this;
@@ -94,17 +96,10 @@ module.exports = function(RED) {
     }
 
     // Handle incoming messages
-    node.on('input', function(msg, send, done) {
+    node.on('input', async function(msg, send, done) {
       try {
-        // Get data from configured input path
-        let inputArray;
-        if (node.inputPathType === 'msg') {
-          inputArray = RED.util.getMessageProperty(msg, node.inputPath);
-        } else if (node.inputPathType === 'flow') {
-          inputArray = node.context().flow.get(node.inputPath);
-        } else if (node.inputPathType === 'global') {
-          inputArray = node.context().global.get(node.inputPath);
-        }
+        // Get data from configured input path (async: context stores may be async)
+        const inputArray = await NodeUtils.getProperty(node, node.inputPathType, node.inputPath, msg);
 
         // Validate input is an array
         if (!Array.isArray(inputArray)) {
@@ -131,16 +126,9 @@ module.exports = function(RED) {
           // Create clean output message with only the selected result
           let outputMsg = {};
           
-          // Set output based on configured path
-          if (node.outputPathType === 'msg') {
-            RED.util.setMessageProperty(outputMsg, node.outputPath, result, true);
-          } else if (node.outputPathType === 'flow') {
-            node.context().flow.set(node.outputPath, result);
-            // For flow context, send minimal message (no payload)
-          } else if (node.outputPathType === 'global') {
-            node.context().global.set(node.outputPath, result);
-            // For global context, send minimal message (no payload)
-          }
+          // Set output based on configured path. For flow/global context the
+          // message sent downstream stays minimal (no payload).
+          await NodeUtils.setProperty(node, node.outputPathType, node.outputPath, result, outputMsg);
           
           node.status({ 
             fill: "green", 

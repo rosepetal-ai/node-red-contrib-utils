@@ -3,46 +3,97 @@
  * Designed to accept raw image objects, encoded buffers, or plain JS values.
  */
 const fs = require('fs').promises;
+const { createWriteStream } = require('fs');
+const { Readable } = require('stream');
+const { pipeline } = require('stream/promises');
 const path = require('path');
 const sharp = require('sharp');
-const zlib = require('zlib');
+const cpuPool = require('../../lib/cpu-pool.js');
 const JSON_WARN_BYTES = 5 * 1024 * 1024; // warn when JSON output is larger than 5MB
-
-const _chunkCrc32 = (buf) => zlib.crc32(buf);
+const STAT_CONCURRENCY = 64;             // concurrent fs.stat calls while scanning a folder
+const SAVE_CONCURRENCY = 4;              // items saved in parallel in multiple mode
+const DISK_INFO_TTL_MS = 1000;           // statfs results are reused for this long per folder
+const WRITE_HIGH_WATER_MARK = 4 * 1024 * 1024;
 
 module.exports = function (RED) {
   const NodeUtils = require('../../lib/node-utils.js')(RED);
-  const dirCache = new Map();
+  const dirCache = new Map();       // folderPath -> Map(filename -> mtimeMs)
+  const dirLoading = new Map();     // folderPath -> promise of the scan in progress
+  const knownDirs = new Set();      // folders already created by this process
+  const dirCreating = new Map();    // folderPath -> promise of the mkdir in progress
+  const inFlightWrites = new Map(); // filePath -> promise of the write currently in progress
 
-  async function getCachedDir(folderPath) {
-    if (dirCache.has(folderPath)) return dirCache.get(folderPath);
-    const map = new Map();
+  /**
+   * One shared Map per folder. Concurrent callers wait for the same scan so
+   * filename reservations made by one save are visible to every other one.
+   */
+  function getCachedDir(folderPath) {
+    const cached = dirCache.get(folderPath);
+    if (cached) return Promise.resolve(cached);
+    let loading = dirLoading.get(folderPath);
+    if (loading) return loading;
+    loading = (async () => {
+      const map = new Map();
+      try {
+        const entries = await fs.readdir(folderPath, { withFileTypes: true });
+        const names = entries.filter(e => e.isFile()).map(e => e.name);
+        for (const { name, mtimeMs } of await statEntries(folderPath, names)) map.set(name, mtimeMs);
+      } catch {
+        // folder doesn't exist yet — empty cache is fine
+      }
+      dirCache.set(folderPath, map);
+      return map;
+    })();
+    dirLoading.set(folderPath, loading);
+    return loading.finally(() => dirLoading.delete(folderPath));
+  }
+
+  /** mkdir once per folder; concurrent callers share the same in-flight call. */
+  function ensureDir(folderPath) {
+    if (knownDirs.has(folderPath)) return Promise.resolve();
+    let creating = dirCreating.get(folderPath);
+    if (creating) return creating;
+    creating = fs.mkdir(folderPath, { recursive: true }).then(() => { knownDirs.add(folderPath); });
+    dirCreating.set(folderPath, creating);
+    return creating.finally(() => dirCreating.delete(folderPath));
+  }
+
+  /** Write, recreating the folder once if it was removed behind our back. */
+  async function writeWithRetry(folderPath, filePath, parts) {
     try {
-      const entries = await fs.readdir(folderPath, { withFileTypes: true });
-      const files = entries.filter(e => e.isFile());
-      const stats = await Promise.all(
-        files.map(async (f) => {
-          const st = await fs.stat(path.join(folderPath, f.name));
-          return { name: f.name, mtimeMs: st.mtimeMs };
-        })
-      );
-      for (const { name, mtimeMs } of stats) map.set(name, mtimeMs);
-    } catch {
-      // folder doesn't exist yet — empty cache is fine
+      await writeParts(filePath, parts);
+    } catch (err) {
+      if (err.code !== 'ENOENT') throw err;
+      knownDirs.delete(folderPath);
+      dirCache.delete(folderPath);
+      await ensureDir(folderPath);
+      await writeParts(filePath, parts);
     }
-    dirCache.set(folderPath, map);
-    return map;
   }
 
   /**
-   * Save a single file to disk. Shared by both single and multiple modes.
-   * Returns a resultInfo object on success.
+   * Writes to the same path are serialised so concurrent messages (or items of a
+   * multiple-mode batch) can never interleave inside one file. Different paths
+   * proceed fully in parallel.
    */
-  async function saveOneFile(folderPath, incoming, filenameRaw, opts) {
-    const { configType, imageFormat: defaultImageFormat, quality, pngCompression, webpOptions,
-            jsonIndent, overwriteEnabled, maxFiles, diskWarnState, diskThreshold, node } = opts;
+  function writeSerialized(folderPath, filePath, parts) {
+    const previous = inFlightWrites.get(filePath) || Promise.resolve();
+    const mine = previous.catch(() => {}).then(() => writeWithRetry(folderPath, filePath, parts));
+    inFlightWrites.set(filePath, mine);
+    return mine.finally(() => {
+      if (inFlightWrites.get(filePath) === mine) inFlightWrites.delete(filePath);
+    });
+  }
 
-    await fs.mkdir(folderPath, { recursive: true });
+  /**
+   * Phase 1: resolve type, format and a unique filename, and reserve it.
+   * Cheap (everything is cached after the first call per folder) and run in
+   * item order so `_<n>` suffixes stay deterministic even when writes run in parallel.
+   */
+  async function planFile(folderPath, incoming, filenameRaw, opts) {
+    const { configType, imageFormat: defaultImageFormat, overwriteEnabled } = opts;
+
+    await ensureDir(folderPath);
 
     if (/[\\/]/.test(filenameRaw)) {
       throw new Error('Filename must not contain path separators.');
@@ -84,6 +135,7 @@ module.exports = function (RED) {
     let filename = `${baseName}.${extension}`;
     let filePath = path.join(folderPath, filename);
 
+    let reservedIn = null;
     if (overwriteEnabled) {
       const dirMap = await getCachedDir(folderPath);
       let counter = 2;
@@ -95,7 +147,20 @@ module.exports = function (RED) {
           throw new Error('Too many file variations exist in target folder.');
         }
       }
+      // Reserve the name right away so concurrent saves never pick the same one.
+      dirMap.set(filename, Date.now());
+      reservedIn = dirMap;
     }
+
+    return { folderPath, filePath, filename, fileType, imageFormat, extension, inferred, reservedIn };
+  }
+
+  /**
+   * Phase 2: encode and write a planned file. Safe to run for several plans concurrently.
+   */
+  async function writePlanned(plan, incoming, opts) {
+    const { quality, pngCompression, webpOptions, jsonIndent, maxFiles, diskWarnState, diskThreshold, node } = opts;
+    const { folderPath, filePath, filename, fileType, imageFormat, extension, inferred, reservedIn } = plan;
 
     // Check disk space
     const diskInfo = diskThreshold > 0 ? await getDiskUsageInfo(folderPath, node, diskWarnState) : null;
@@ -104,41 +169,42 @@ module.exports = function (RED) {
       throw new Error(`Storage at "${folderPath}" is ${usedPercent}% full. Skipping save to avoid exhausting disk space.`);
     }
 
-    // Prepare data to write
-    let payloadToWrite;
-    let isText = false;
-
-    if (fileType === 'image') {
-      payloadToWrite = await toImageBuffer(incoming, imageFormat, quality, pngCompression, webpOptions, NodeUtils, node);
-    } else if (fileType === 'json') {
-      if (typeof incoming === 'string') {
-        try {
-          JSON.parse(incoming);
-          payloadToWrite = incoming;
-        } catch {
-          payloadToWrite = JSON.stringify(incoming, null, jsonIndent);
+    // Prepare the file as an ordered list of Buffer parts (images may come back
+    // from the worker as [header, pixels] so nothing has to be concatenated).
+    let parts;
+    try {
+      if (fileType === 'image') {
+        parts = await toImageParts(incoming, imageFormat, quality, pngCompression, webpOptions,
+                                   NodeUtils, node, inferred.inputFormat);
+      } else if (fileType === 'json') {
+        let text;
+        if (typeof incoming === 'string') {
+          try {
+            JSON.parse(incoming);
+            text = incoming;
+          } catch {
+            text = JSON.stringify(incoming, null, jsonIndent);
+          }
+        } else {
+          text = JSON.stringify(incoming, null, jsonIndent);
         }
+        parts = [Buffer.from(text, 'utf8')];
+      } else if (fileType === 'text') {
+        const text = incoming === undefined || incoming === null ? '' : String(incoming);
+        parts = [Buffer.from(text, 'utf8')];
       } else {
-        payloadToWrite = JSON.stringify(incoming, null, jsonIndent);
+        parts = [await toBinary(incoming)];
       }
-      isText = true;
-    } else if (fileType === 'text') {
-      payloadToWrite = incoming === undefined || incoming === null ? '' : String(incoming);
-      isText = true;
-    } else {
-      payloadToWrite = await toBinary(incoming);
-    }
 
-    if (isText) {
-      await fs.writeFile(filePath, payloadToWrite, 'utf8');
-    } else {
-      await fs.writeFile(filePath, payloadToWrite);
+      await writeSerialized(folderPath, filePath, parts);
+    } catch (err) {
+      reservedIn?.delete(filename);
+      throw err;
     }
     dirCache.get(folderPath)?.set(filename, Date.now());
 
-    const sizeBytes = isText
-      ? Buffer.byteLength(payloadToWrite, 'utf8')
-      : payloadToWrite.length;
+    let sizeBytes = 0;
+    for (const part of parts) sizeBytes += part.length;
 
     // Enforce max files retention policy
     if (maxFiles > 0) {
@@ -167,6 +233,15 @@ module.exports = function (RED) {
     return resultInfo;
   }
 
+  /**
+   * Save a single file to disk. Shared by both single and multiple modes.
+   * Returns a resultInfo object on success.
+   */
+  async function saveOneFile(folderPath, incoming, filenameRaw, opts) {
+    const plan = await planFile(folderPath, incoming, filenameRaw, opts);
+    return writePlanned(plan, incoming, opts);
+  }
+
   function SaveFileNode(config) {
     RED.nodes.createNode(this, config);
     const node = this;
@@ -178,17 +253,7 @@ module.exports = function (RED) {
 
       try {
         const evaluateProperty = (value, type, fallback = 'str') =>
-          new Promise((resolve, reject) => {
-            const actualType = type || fallback;
-            try {
-              RED.util.evaluateNodeProperty(value, actualType, node, msg, (err, res) => {
-                if (err) reject(err);
-                else resolve(res);
-              });
-            } catch (err) {
-              reject(err);
-            }
-          });
+          NodeUtils.evaluateProperty(node, value, type || fallback, msg);
 
         // Resolve max files retention limit
         let maxFiles = 0;
@@ -225,18 +290,12 @@ module.exports = function (RED) {
           overwriteEnabled, maxFiles, diskWarnState, diskThreshold, node
         };
 
-        // Store output helper
-        function storeOutput(outputValue) {
+        // Store output helper (context writes are async so async stores are supported)
+        async function storeOutput(outputValue) {
           const outputPath = config.outputPath || 'savedFile';
           const outputPathType = config.outputPathType || 'msg';
           try {
-            if (outputPathType === 'msg') {
-              RED.util.setMessageProperty(msg, outputPath, outputValue, true);
-            } else if (outputPathType === 'flow') {
-              node.context().flow.set(outputPath, outputValue);
-            } else if (outputPathType === 'global') {
-              node.context().global.set(outputPath, outputValue);
-            }
+            await NodeUtils.setProperty(node, outputPathType, outputPath, outputValue, msg);
           } catch (setErr) {
             node.warn(`Unable to store output metadata: ${setErr.message}`);
           }
@@ -245,12 +304,7 @@ module.exports = function (RED) {
         if (config.mode === 'multiple') {
           // --- Multiple files mode ---
           const saveConfigType = config.saveConfigType || 'msg';
-          let saveConfig;
-          if (saveConfigType === 'msg') {
-            saveConfig = RED.util.getMessageProperty(msg, config.saveConfig || 'payload');
-          } else {
-            saveConfig = await evaluateProperty(config.saveConfig || 'payload', saveConfigType);
-          }
+          let saveConfig = await evaluateProperty(config.saveConfig || 'payload', saveConfigType);
 
           // Wrap single object in array
           if (saveConfig && typeof saveConfig === 'object' && !Array.isArray(saveConfig)) {
@@ -276,7 +330,8 @@ module.exports = function (RED) {
           const sharedOutputDir = outputDirFieldType !== 'item'
             ? await evaluateProperty(outputDirField, outputDirFieldType) : undefined;
 
-          const results = [];
+          // Phase 1 (sequential, in item order): validate items and reserve filenames.
+          const plans = [];
           let skipped = 0;
 
           for (let idx = 0; idx < saveConfig.length; idx++) {
@@ -310,19 +365,31 @@ module.exports = function (RED) {
                 : (sharedFilename !== undefined && sharedFilename !== null
                     ? String(sharedFilename).trim() : '');
 
-              const resultInfo = await saveOneFile(folderPath, incoming, filenameRaw, saveOpts);
-              results.push(resultInfo);
+              plans.push({ idx, incoming, plan: await planFile(folderPath, incoming, filenameRaw, saveOpts) });
             } catch (itemErr) {
               node.warn(`Item ${idx}: ${itemErr.message}`);
               skipped++;
             }
           }
 
+          // Phase 2 (bounded concurrency): encode and write. Results keep the item order.
+          const slots = new Array(saveConfig.length);
+          await mapLimit(plans, SAVE_CONCURRENCY, async ({ idx, incoming, plan }) => {
+            try {
+              slots[idx] = await writePlanned(plan, incoming, saveOpts);
+            } catch (itemErr) {
+              node.warn(`Item ${idx}: ${itemErr.message}`);
+              skipped++;
+            }
+          });
+
+          const results = slots.filter(r => r !== undefined);
+
           if (results.length === 0) {
             throw new Error('All items failed to save.');
           }
 
-          storeOutput(results);
+          await storeOutput(results);
 
           const elapsed = Date.now() - started;
           const total = results.length + skipped;
@@ -339,14 +406,7 @@ module.exports = function (RED) {
 
           const inputPath = config.inputPath || 'payload';
           const inputPathType = config.inputPathType || 'msg';
-          let rawInput;
-          if (inputPathType === 'msg') {
-            rawInput = RED.util.getMessageProperty(msg, inputPath);
-          } else if (inputPathType === 'flow') {
-            rawInput = node.context().flow.get(inputPath);
-          } else if (inputPathType === 'global') {
-            rawInput = node.context().global.get(inputPath);
-          }
+          const rawInput = await NodeUtils.getProperty(node, inputPathType, inputPath, msg);
           if (rawInput === undefined) {
             throw new Error('No data found at configured input path.');
           }
@@ -363,7 +423,7 @@ module.exports = function (RED) {
             ? String(rawFilename).trim() : '';
 
           const resultInfo = await saveOneFile(folderPath, rawInput, filenameRaw, saveOpts);
-          storeOutput(resultInfo);
+          await storeOutput(resultInfo);
 
           const elapsed = Date.now() - started;
           node.status({ fill: 'green', shape: 'dot', text: `saved ${resultInfo.filename} (${elapsed}ms)` });
@@ -384,6 +444,45 @@ module.exports = function (RED) {
 };
 
 // Helpers
+
+/** Run `fn` over `items` with at most `limit` in flight; results keep item order. */
+async function mapLimit(items, limit, fn) {
+  const results = new Array(items.length);
+  let next = 0;
+  const lanes = [];
+  for (let l = 0; l < Math.min(limit, items.length); l++) {
+    lanes.push((async () => {
+      for (;;) {
+        const i = next++;
+        if (i >= items.length) return;
+        results[i] = await fn(items[i], i);
+      }
+    })());
+  }
+  await Promise.all(lanes);
+  return results;
+}
+
+/** stat many files with bounded concurrency, ignoring ones removed meanwhile. */
+async function statEntries(folderPath, names) {
+  const entries = await mapLimit(names, STAT_CONCURRENCY, async (name) => {
+    try {
+      const st = await fs.stat(path.join(folderPath, name));
+      return { name, mtimeMs: st.mtimeMs };
+    } catch (err) {
+      if (err.code === 'ENOENT') return null;
+      throw err;
+    }
+  });
+  return entries.filter(Boolean);
+}
+
+/** Write an ordered list of Buffer parts to `filePath` without concatenating them. */
+function writeParts(filePath, parts) {
+  if (parts.length === 1) return fs.writeFile(filePath, parts[0]);
+  return pipeline(Readable.from(parts), createWriteStream(filePath, { highWaterMark: WRITE_HIGH_WATER_MARK }));
+}
+
 function mapExtension(ext) {
   if (!ext) return null;
   const lower = ext.toLowerCase();
@@ -426,16 +525,17 @@ async function inferFileType(value, extInfo) {
 
   if (value && typeof value === 'object') {
     if (Buffer.isBuffer(value)) {
+      // The detected format is passed along so the encoder does not parse the header twice.
+      let inputFormat = null;
       try {
         const meta = await sharp(value).metadata();
-        if (meta?.format) {
-          const fmt = normalizeSharpFormat(meta.format);
-          if (fmt) return { type: 'image', format: fmt };
-        }
+        inputFormat = meta?.format || null;
+        const fmt = normalizeSharpFormat(inputFormat);
+        if (fmt) return { type: 'image', format: fmt, inputFormat };
       } catch {
         // Not an image buffer
       }
-      return { type: 'binary' };
+      return { type: 'binary', inputFormat };
     }
 
     if (isRawImageLike(value)) {
@@ -485,23 +585,31 @@ async function toBinary(value) {
   return Buffer.from(JSON.stringify(value ?? ''), 'utf8');
 }
 
-async function toImageBuffer(imageValue, format, quality, pngCompression, webpOptions, NodeUtils, node) {
+/**
+ * Encode an image into an ordered list of Buffer parts.
+ * @param {string|null|undefined} knownInputFormat - sharp format already detected
+ *   for encoded buffers (undefined = not probed yet, null = not an image).
+ * @returns {Promise<Buffer[]>}
+ */
+async function toImageParts(imageValue, format, quality, pngCompression, webpOptions, NodeUtils, node, knownInputFormat) {
   // Encoded buffer path
   if (Buffer.isBuffer(imageValue) && !(imageValue.width && imageValue.height)) {
-    let inputFormat;
-    try {
-      const metadata = await sharp(imageValue).metadata();
-      inputFormat = metadata.format;
-    } catch {
-      inputFormat = null;
+    let inputFormat = knownInputFormat;
+    if (inputFormat === undefined) {
+      try {
+        const metadata = await sharp(imageValue).metadata();
+        inputFormat = metadata.format;
+      } catch {
+        inputFormat = null;
+      }
     }
 
     if (inputFormat && (normalizeSharpFormat(inputFormat) === format)) {
-      return imageValue;
+      return [imageValue];
     }
 
     const sharpInstance = sharp(imageValue);
-    return encodeSharp(sharpInstance, format, quality, pngCompression, webpOptions);
+    return [await encodeSharp(sharpInstance, format, quality, pngCompression, webpOptions)];
   }
 
   // Raw image path (uses validator for clear errors)
@@ -512,150 +620,37 @@ async function toImageBuffer(imageValue, format, quality, pngCompression, webpOp
 
   const colorSpace = validated.colorSpace;
   const channels = validated.channels;
-  let data = validated.data;
+  const isBgr = colorSpace === 'BGR' || colorSpace === 'BGRA';
+  const isRgb = colorSpace === 'RGB' || colorSpace === 'RGBA';
+  const width = validated.width;
+  const height = validated.height;
 
-  // BMP stores pixels in BGR order natively
+  // BMP stores pixels in BGR order natively: raw encoder on a worker thread,
+  // swapping channels when the source is RGB/RGBA. Returns [header, pixels].
   if (format === 'bmp') {
-    let nativeData = data;
-    if (colorSpace === 'RGB' || colorSpace === 'RGBA') {
-      nativeData = Buffer.from(data);
-      for (let i = 0; i < nativeData.length; i += channels) {
-        const t = nativeData[i]; nativeData[i] = nativeData[i + 2]; nativeData[i + 2] = t;
-      }
-    }
-    const buf = Buffer.isBuffer(nativeData) ? nativeData : Buffer.from(nativeData);
-    return encodeBmpRaw(buf, validated.width, validated.height, channels);
+    return cpuPool.encodeBmp(validated.data, width, height, channels, isRgb);
   }
 
-  if (colorSpace === 'BGR' || colorSpace === 'BGRA') {
-    data = Buffer.from(data);
-    for (let i = 0; i < data.length; i += channels) {
-      const t = data[i];
-      data[i] = data[i + 2];
-      data[i + 2] = t;
-    }
-  }
-
-  // Fast PNG path: raw encoder with native CRC32, no Sharp overhead
+  // Fast PNG path (compression 0): raw encoder on a worker thread, no Sharp
+  // overhead. Returns [head, zlib stream, tail].
   if (format === 'png' && pngCompression === 0) {
-    const buf = Buffer.isBuffer(data) ? data : Buffer.from(data);
-    return encodePngRaw(buf, validated.width, validated.height, channels);
+    return cpuPool.encodePng(validated.data, width, height, channels, isBgr);
   }
+
+  // Sharp expects RGB/RGBA; reorder BGR/BGRA on a worker thread (returns a copy).
+  const data = isBgr
+    ? await cpuPool.swapRB(validated.data, channels)
+    : validated.data;
 
   let sharpInstance = sharp(data, {
-    raw: {
-      width: validated.width,
-      height: validated.height,
-      channels: channels
-    }
+    raw: { width, height, channels }
   });
 
   if (colorSpace === 'GRAY') {
     sharpInstance = sharpInstance.toColourspace('b-w');
   }
 
-  return encodeSharp(sharpInstance, format, quality, pngCompression, webpOptions);
-}
-
-function encodeBmpRaw(data, width, height, channels) {
-  const bpp = channels * 8;
-  const rowBytes = width * channels;
-  const rowPadding = (4 - (rowBytes % 4)) % 4;
-  const paddedRow = rowBytes + rowPadding;
-  const hasPalette = channels === 1;
-  const paletteSize = hasPalette ? 1024 : 0; // 256 RGBX entries
-  const headerSize = 14 + 40 + paletteSize;
-  const pixelDataSize = paddedRow * height;
-  const fileSize = headerSize + pixelDataSize;
-
-  const buf = Buffer.allocUnsafe(fileSize);
-
-  // BITMAPFILEHEADER (14 bytes)
-  buf[0] = 0x42; buf[1] = 0x4D; // 'BM'
-  buf.writeUInt32LE(fileSize, 2);
-  buf.writeUInt16LE(0, 6);  // reserved
-  buf.writeUInt16LE(0, 8);  // reserved
-  buf.writeUInt32LE(headerSize, 10);
-
-  // BITMAPINFOHEADER (40 bytes)
-  buf.writeUInt32LE(40, 14);
-  buf.writeInt32LE(width, 18);
-  buf.writeInt32LE(-height, 22); // negative = top-down
-  buf.writeUInt16LE(1, 26);     // planes
-  buf.writeUInt16LE(bpp, 28);
-  buf.writeUInt32LE(0, 30);     // no compression
-  buf.writeUInt32LE(pixelDataSize, 34);
-  buf.writeInt32LE(2835, 38);   // ~72 DPI horizontal
-  buf.writeInt32LE(2835, 42);   // ~72 DPI vertical
-  buf.writeUInt32LE(hasPalette ? 256 : 0, 46); // colors used
-  buf.writeUInt32LE(0, 50);     // important colors
-
-  // Grayscale palette for 1-channel images
-  if (hasPalette) {
-    for (let i = 0; i < 256; i++) {
-      const off = 54 + i * 4;
-      buf[off] = i; buf[off + 1] = i; buf[off + 2] = i; buf[off + 3] = 0;
-    }
-  }
-
-  // Pixel data with row padding
-  const padBytes = Buffer.alloc(rowPadding); // zeroed
-  for (let y = 0; y < height; y++) {
-    const srcOff = y * rowBytes;
-    const dstOff = headerSize + y * paddedRow;
-    data.copy(buf, dstOff, srcOff, srcOff + rowBytes);
-    if (rowPadding > 0) {
-      padBytes.copy(buf, dstOff + rowBytes);
-    }
-  }
-
-  return buf;
-}
-
-function encodePngRaw(data, width, height, channels) {
-  const colorType = channels === 1 ? 0 : channels === 3 ? 2 : 6;
-  const stride = width * channels;
-  const filtered = Buffer.allocUnsafe(height * (1 + stride));
-  for (let y = 0; y < height; y++) {
-    const rowOffset = y * (1 + stride);
-    filtered[rowOffset] = 0; // no filter
-    data.copy(filtered, rowOffset + 1, y * stride, (y + 1) * stride);
-  }
-  const compressed = zlib.deflateSync(filtered, { level: 0 });
-  const out = Buffer.allocUnsafe(57 + compressed.length);
-  let o = 0;
-
-  // PNG signature
-  out[o++] = 137; out[o++] = 80; out[o++] = 78; out[o++] = 71;
-  out[o++] = 13;  out[o++] = 10; out[o++] = 26; out[o++] = 10;
-
-  // IHDR chunk
-  out.writeUInt32BE(13, o); o += 4;
-  const ihdrTypeStart = o;
-  out.write('IHDR', o); o += 4;
-  out.writeUInt32BE(width, o); o += 4;
-  out.writeUInt32BE(height, o); o += 4;
-  out[o++] = 8; // bit depth
-  out[o++] = colorType;
-  out[o++] = 0; // compression
-  out[o++] = 0; // filter
-  out[o++] = 0; // interlace
-  out.writeUInt32BE(_chunkCrc32(out.subarray(ihdrTypeStart, o)), o); o += 4;
-
-  // IDAT chunk
-  out.writeUInt32BE(compressed.length, o); o += 4;
-  const idatTypeStart = o;
-  out.write('IDAT', o); o += 4;
-  compressed.copy(out, o); o += compressed.length;
-  out.writeUInt32BE(_chunkCrc32(out.subarray(idatTypeStart, o)), o); o += 4;
-
-  // IEND chunk
-  out.writeUInt32BE(0, o); o += 4;
-  const iendTypeStart = o;
-  out.write('IEND', o); o += 4;
-  out.writeUInt32BE(_chunkCrc32(out.subarray(iendTypeStart, o)), o);
-
-  return out;
+  return [await encodeSharp(sharpInstance, format, quality, pngCompression, webpOptions)];
 }
 
 function encodeSharp(sharpInstance, format, quality, pngCompression, webpOptions) {
@@ -704,13 +699,7 @@ async function enforceMaxFiles(folderPath, maxCount, cachedMap) {
       if (!cachedMap.has(name)) unknown.push(name);
     }
     if (unknown.length > 0) {
-      const stats = await Promise.all(
-        unknown.map(async (name) => {
-          const st = await fs.stat(path.join(folderPath, name));
-          return { name, mtimeMs: st.mtimeMs };
-        })
-      );
-      for (const { name, mtimeMs } of stats) cachedMap.set(name, mtimeMs);
+      for (const { name, mtimeMs } of await statEntries(folderPath, unknown)) cachedMap.set(name, mtimeMs);
     }
   }
 
@@ -719,12 +708,7 @@ async function enforceMaxFiles(folderPath, maxCount, cachedMap) {
   if (cachedMap && cachedMap.size > 0) {
     sorted = Array.from(cachedMap.entries()).map(([name, mtimeMs]) => ({ name, mtimeMs }));
   } else {
-    sorted = await Promise.all(
-      Array.from(diskFiles).map(async (name) => {
-        const st = await fs.stat(path.join(folderPath, name));
-        return { name, mtimeMs: st.mtimeMs };
-      })
-    );
+    sorted = await statEntries(folderPath, Array.from(diskFiles));
   }
   sorted.sort((a, b) => a.mtimeMs - b.mtimeMs);
 
@@ -739,7 +723,11 @@ async function enforceMaxFiles(folderPath, maxCount, cachedMap) {
   }
 }
 
+const diskInfoCache = new Map(); // targetPath -> { at, info }
+
 async function getDiskUsageInfo(targetPath, node, warnState) {
+  const cached = diskInfoCache.get(targetPath);
+  if (cached && Date.now() - cached.at < DISK_INFO_TTL_MS) return cached.info;
   try {
     const stats = await fs.statfs(targetPath);
     const blockSize = Number(stats.bsize) || 0;
@@ -757,11 +745,10 @@ async function getDiskUsageInfo(targetPath, node, warnState) {
     }
 
     const usedRatio = 1 - (availableBytes / totalBytes);
-    return {
-      totalBytes,
-      availableBytes,
-      usedRatio
-    };
+    const info = { totalBytes, availableBytes, usedRatio };
+    if (diskInfoCache.size > 1000) diskInfoCache.clear();
+    diskInfoCache.set(targetPath, { at: Date.now(), info });
+    return info;
   } catch (err) {
     if (!warnState.logged) {
       node.warn(`Disk usage check failed for "${targetPath}": ${err.message}`);

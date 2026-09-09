@@ -68,9 +68,17 @@ Notes:
 | **BMP** | Uncompressed bitmap. Supports 8-bit grayscale, 24-bit BGR, and 32-bit BGRA. Uses a fast raw encoder (no Sharp dependency). |
 
 ## Behavior
-- Raw image inputs are validated and encoded with Sharp; BGR/BGRA channels are auto-swapped.
-- BMP encoding uses a native raw encoder that writes pixels in BGR order directly, avoiding Sharp overhead.
-- PNG at compression level 0 uses a fast raw encoder with native CRC32 for maximum throughput.
+- Nothing in this node blocks the event loop: all filesystem access is asynchronous, Sharp encodes on its own thread pool, and every pure-JavaScript pixel operation runs on a worker thread.
+- Large raw images are copied once into shared memory, already in the row layout the encoder needs. The copy is time-budgeted (it yields to the event loop every 0.5 ms), so a 4K frame never holds the loop for more than a couple of milliseconds.
+- Raw image inputs are validated and encoded with Sharp; BGR/BGRA channels are swapped in place on a worker thread.
+- BMP encoding uses a raw encoder (on a worker thread) that writes pixels in BGR order directly, avoiding Sharp overhead. The pixel rows are written straight from shared memory: zero copies.
+- PNG at compression level 0 uses a raw encoder with native CRC32 for maximum throughput, also on a worker thread. The file is written as parts (header, zlib stream, trailer) so nothing is concatenated.
+- One worker thread is always kept warm; more are created lazily up to `min(4, cores - 1)` (override with the `RP_CPU_WORKERS` environment variable) and shut down after 60 s idle.
+- Encoded image buffers are probed once with Sharp; the detected format is reused by the encoder.
+- In multiple mode, up to 4 items are saved in parallel; results keep the item order.
+- Writes to the same path are serialised, so concurrent messages or items can never interleave inside one file. With overwrite protection on, filenames are reserved before writing, so concurrent saves always get unique `_<n>` suffixes.
+- Folder creation and folder scans are cached per folder; a folder removed externally is recreated on the next save. Disk usage (`statfs`) is cached for 1 s per folder.
+- Context reads and writes (`flow` / `global`) use Node-RED's asynchronous context API, so asynchronous context stores are supported.
 - JSON inputs are pretty-printed; valid JSON strings are kept as-is.
 - Text mode writes stringified content; binary mode writes buffers directly (or stringified when not a buffer).
 - When overwrite protection is enabled, the node keeps adding `_<n>` until a free filename is found.

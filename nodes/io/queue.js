@@ -68,16 +68,17 @@ module.exports = function (RED) {
       }
 
       const now = Date.now();
-      const expiredEntries = [];
 
-      while (state.queue.length > 0) {
-        const oldest = state.queue[0];
-        if (now - oldest.enqueuedAt >= node.timeoutMs) {
-          expiredEntries.push(state.queue.shift());
-        } else {
-          break;
-        }
+      // Entries are enqueued in order, so expired ones form a prefix: find its
+      // end and cut it out in a single splice (no repeated O(n) shift calls).
+      let expiredCount = 0;
+      while (
+        expiredCount < state.queue.length &&
+        now - state.queue[expiredCount].enqueuedAt >= node.timeoutMs
+      ) {
+        expiredCount += 1;
       }
+      const expiredEntries = expiredCount > 0 ? state.queue.splice(0, expiredCount) : [];
 
       if (expiredEntries.length > 0) {
         node.warn(`Queue node dropped ${expiredEntries.length} message(s) due to timeout.`);

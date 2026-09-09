@@ -4,6 +4,8 @@
  */
 
 module.exports = function (RED) {
+  const NodeUtils = require('../../lib/node-utils.js')(RED);
+
   function ArrayOutNode(config) {
     RED.nodes.createNode(this, config);
     const node = this;
@@ -52,7 +54,7 @@ module.exports = function (RED) {
       node.collectionStartTime = null;
     }
 
-    function handleTimeout() {
+    async function handleTimeout() {
       const elapsed = Date.now() - node.collectionStartTime;
       
       /* Build timeout message with collected data + missing info */
@@ -81,15 +83,18 @@ module.exports = function (RED) {
         }
       };
       
-      /* Place the partial array where the user wants it */
-      if (node.outputPathType === 'msg') {
-        RED.util.setMessageProperty(timeoutMsg, node.outputPath, result, true);
-      } else if (node.outputPathType === 'flow') {
-        node.context().flow.set(node.outputPath, result);
-      } else if (node.outputPathType === 'global') {
-        node.context().global.set(node.outputPath, result);
+      /* Reset before the async context write so a new collection can start meanwhile */
+      resetCollection();
+
+      try {
+        /* Place the partial array where the user wants it (async: context stores may be async) */
+        await NodeUtils.setProperty(node, node.outputPathType, node.outputPath, result, timeoutMsg);
+      } catch (err) {
+        node.status({ fill: 'red', shape: 'ring', text: 'Error' });
+        node.error(err, timeoutMsg);
+        return;
       }
-      
+
       /* Send to output 2 only */
       node.send([null, timeoutMsg]);
       
@@ -99,11 +104,10 @@ module.exports = function (RED) {
         text: `Timeout: sent ${collectedPositions.length}/${node.expectedCount} to output 2`
       });
       
-      resetCollection();
       setTimeout(setStatusReady, 3000);
     }
 
-    function assembleAndOutput(sourceMsg) {
+    async function assembleAndOutput(sourceMsg) {
       const elapsed = Date.now() - node.collectionStartTime;
 
       /* Build the ordered array (fill gaps with null) */
@@ -111,15 +115,12 @@ module.exports = function (RED) {
         node.collection.hasOwnProperty(i) ? node.collection[i] : null
       );
 
-      /* Place the array where the user wants it */
+      /* Reset before the async context write so a new collection can start meanwhile */
+      resetCollection();
+
+      /* Place the array where the user wants it (async: context stores may be async) */
       const outMsg = { ...sourceMsg }; // shallow‑clone to keep headers etc.
-      if (node.outputPathType === 'msg') {
-        RED.util.setMessageProperty(outMsg, node.outputPath, result, true);
-      } else if (node.outputPathType === 'flow') {
-        node.context().flow.set(node.outputPath, result);
-      } else if (node.outputPathType === 'global') {
-        node.context().global.set(node.outputPath, result);
-      }
+      await NodeUtils.setProperty(node, node.outputPathType, node.outputPath, result, outMsg);
 
       node.status({
         fill: 'green',
@@ -130,13 +131,12 @@ module.exports = function (RED) {
 
       /* Return to ready after a short pause */
       setTimeout(setStatusReady, 2000);
-      resetCollection();
     }
 
     /* ────────────────────────────
        ░░ 4.  Input handler      ░░
        ──────────────────────────── */
-    node.on('input', function (msg, send, done) {
+    node.on('input', async function (msg, send, done) {
       try {
         /* 4.1  Basic sanity checks */
         if (!msg.meta || typeof msg.meta.arrayPosition !== 'number') {
@@ -188,7 +188,7 @@ module.exports = function (RED) {
 
         /* 4.7  Check completion */
         if (collected === node.expectedCount) {
-          assembleAndOutput(msg);
+          await assembleAndOutput(msg);
         }
 
         done?.();

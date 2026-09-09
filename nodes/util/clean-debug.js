@@ -5,6 +5,9 @@ const util = require("util");
 module.exports = function registerCleanDebugNode(RED) {
   const DEFAULT_DEBUG_MAX_LENGTH = (RED.settings && RED.settings.debugMaxLength) || 1000;
   const BUFFER_PREVIEW_BYTES = Math.max(DEFAULT_DEBUG_MAX_LENGTH, 512);
+  // Heuristics on strings only ever look at this many leading characters so a
+  // multi-megabyte string costs O(1) instead of a full regex scan.
+  const STRING_SAMPLE_CHARS = 4096;
 
   function CleanDebugNode(config) {
     RED.nodes.createNode(this, config);
@@ -48,7 +51,9 @@ module.exports = function registerCleanDebugNode(RED) {
      */
     function resolveDebugValue(msg) {
       if (node.targetType === "full" || node.targetType === "complete") {
-        return Promise.resolve(RED.util.cloneMessage(msg));
+        // No cloneMessage here: sanitiseValue never mutates its input and a deep
+        // clone of a message carrying image buffers is a large synchronous copy.
+        return Promise.resolve(msg);
       }
 
       if (node.targetType === "msg" || node.targetType === "msgProperty") {
@@ -217,10 +222,12 @@ module.exports = function registerCleanDebugNode(RED) {
         seen.set(value, path || "~");
 
         if (value.type === "Buffer" && Array.isArray(value.data)) {
-          if (opts.mode === "clean") {
+          if (opts.mode === "clean" || opts.bufferPreviewLength <= 0) {
             return createPlaceholder("Buffer", `${value.data.length} bytes`);
           }
-          return encodeBuffer(Buffer.from(value.data), opts);
+          // Only materialise the preview window, never the whole byte array.
+          const preview = Buffer.from(value.data.slice(0, opts.bufferPreviewLength));
+          return encodeBuffer(preview, opts, value.data.length);
         }
 
         if (depth >= opts.maxDepth) {
@@ -273,13 +280,17 @@ module.exports = function registerCleanDebugNode(RED) {
    * @param {object} opts
    */
   function sanitiseString(value, opts) {
-    const trimmed = value.trim();
-    if (opts.mode === "clean" && trimmed.startsWith("data:image/")) {
-      return createPlaceholder("DataImage", `${value.length} chars`);
-    }
-
-    if (opts.mode === "clean" && isLikelyBase64(trimmed)) {
-      return createPlaceholder("Base64", `${value.length} chars`);
+    if (opts.mode === "clean") {
+      // Inspect a bounded sample: trimming / regex-testing a huge string in full
+      // would be O(n) synchronous work on the event loop.
+      const sample = value.length > STRING_SAMPLE_CHARS ? value.slice(0, STRING_SAMPLE_CHARS) : value;
+      const trimmed = sample.trim();
+      if (trimmed.startsWith("data:image/")) {
+        return createPlaceholder("DataImage", `${value.length} chars`);
+      }
+      if (isLikelyBase64(trimmed, value.length)) {
+        return createPlaceholder("Base64", `${value.length} chars`);
+      }
     }
 
     if (value.length > opts.maxStringLength) {
@@ -293,17 +304,17 @@ module.exports = function registerCleanDebugNode(RED) {
    * @param {Buffer} buffer
    * @param {object} opts
    */
-  function encodeBuffer(buffer, opts) {
+  function encodeBuffer(buffer, opts, totalLength = buffer.length) {
     if (opts.mode === "clean" || opts.bufferPreviewLength <= 0) {
-      return createPlaceholder("Buffer", `${buffer.length} bytes`);
+      return createPlaceholder("Buffer", `${totalLength} bytes`);
     }
 
     const previewLength = Math.min(buffer.length, opts.bufferPreviewLength);
-    const slice = buffer.slice(0, previewLength).toJSON();
-    slice.length = buffer.length;
-    if (previewLength < buffer.length) {
+    const slice = buffer.subarray(0, previewLength).toJSON();
+    slice.length = totalLength;
+    if (previewLength < totalLength) {
       slice.__cleanDebugTruncated = true;
-      slice.__cleanDebugNote = `${buffer.length - previewLength} more bytes not shown`;
+      slice.__cleanDebugNote = `${totalLength - previewLength} more bytes not shown`;
     }
     return slice;
   }
@@ -338,19 +349,21 @@ module.exports = function registerCleanDebugNode(RED) {
 
   /**
    * Detect base64-ish strings that are long enough to be heavy payloads.
-   * @param {string} value
+   * Only the (bounded) sample is scanned; the total length decides size checks.
+   * @param {string} sample - leading portion of the string (trimmed)
+   * @param {number} totalLength - full string length
    */
-  function isLikelyBase64(value) {
-    if (value.length < 512) {
+  function isLikelyBase64(sample, totalLength) {
+    if (totalLength < 512) {
       return false;
     }
-    if (value.length % 4 !== 0) {
+    if (totalLength % 4 !== 0) {
       return false;
     }
-    if (!/^[A-Za-z0-9+/=\s]+$/.test(value)) {
+    if (!/^[A-Za-z0-9+/=\s]+$/.test(sample)) {
       return false;
     }
-    const paddingRatio = (value.match(/=/g) || []).length / value.length;
+    const paddingRatio = (sample.match(/=/g) || []).length / sample.length;
     return paddingRatio < 0.1;
   }
 

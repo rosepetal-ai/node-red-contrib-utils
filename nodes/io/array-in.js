@@ -29,12 +29,12 @@ module.exports = function(RED) {
     });
 
     // Handle incoming messages
-    node.on('input', function(msg, send, done) {
+    node.on('input', async function(msg, send, done) {
       try {
-        // Resolve array position dynamically
+        // Resolve array position dynamically (async: context stores may be async)
         let resolvedPosition;
         try {
-          resolvedPosition = NodeUtils.resolveArrayPosition(
+          resolvedPosition = await NodeUtils.resolveArrayPosition(
             node, 
             node.arrayPositionType, 
             node.arrayPositionValue, 
@@ -47,14 +47,7 @@ module.exports = function(RED) {
         }
 
         // Get data from configured input path
-        let arrayData;
-        if (node.inputPathType === 'msg') {
-          arrayData = RED.util.getMessageProperty(msg, node.inputPath);
-        } else if (node.inputPathType === 'flow') {
-          arrayData = node.context().flow.get(node.inputPath);
-        } else if (node.inputPathType === 'global') {
-          arrayData = node.context().global.get(node.inputPath);
-        }
+        let arrayData = await NodeUtils.getProperty(node, node.inputPathType, node.inputPath, msg);
 
         // Handle undefined data gracefully
         if (arrayData === undefined) {
