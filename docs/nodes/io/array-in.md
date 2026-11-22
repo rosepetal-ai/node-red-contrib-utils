@@ -65,7 +65,7 @@ One output. The node sends the incoming message on with `msg.meta` added (create
   - **msg.***: Dynamic position from message property
   - **flow.***: Position from flow context
   - **global.***: Position from global context
-- **Range**: Non-negative integers (0-based indexing). The value is read with `parseInt`, so `2.7` and `"2"` both give `2`; an empty value means `0`.
+- **Range**: Non-negative integers (0-based indexing). The value is read with `parseInt`, so `2.7` and `"2"` both give `2`; an empty field means `0`.
 - **Purpose**: Determines where this data appears in the final array
 
 ## Performance Notes

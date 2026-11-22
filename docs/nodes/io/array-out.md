@@ -81,7 +81,7 @@ Sent when **Timeout** expires first. It is a new message: it carries only `meta`
 ### Expected Count
 - **Type**: Number (required)
 - **Default**: `2`
-- **Range**: Minimum 1. A value that is not a positive integer logs the error `Invalid expectedCount. Must be a positive integer.` at deploy and the node uses `2`
+- **Range**: Minimum 1. The value is read with `parseInt` (`2.5` gives `2`); a value that gives no integer of 1 or more logs the error `Invalid expectedCount. Must be a positive integer.` at deploy and the node uses `2`
 - **Purpose**: Number of array elements required before output
 - **Validation**: Should equal the number of positions sent by the connected array-in nodes (`0` to Expected Count - 1); the node does not check the wiring
 - **Impact**: Array assembly completes when this many different positions are collected
@@ -146,7 +146,7 @@ Merge results from parallel processing pipelines.
 ### Quality Control Assembly
 ```
 [Inspection A] → [Array-In: pos=0] ┐
-[Inspection B] → [Array-In: pos=1] ├→ [Array-Out: timeout=10000] → [Final Report]
+[Inspection B] → [Array-In: pos=1] ├→ [Array-Out: count=3, timeout=10000] → [Final Report]
 [Inspection C] → [Array-In: pos=2] ┘
 ```
 Collect quality control results with extended timeout.

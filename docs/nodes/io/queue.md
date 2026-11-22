@@ -69,7 +69,7 @@ Messages only wait when **Interval** is greater than 0. With an interval of 0 ev
 - Messages are processed in first-in-first-out order.
 - The node emits messages immediately when the interval requirement has already been satisfied.
 - If necessary, the node waits the remaining interval before releasing the next message.
-- When messages expire due to timeout (and timeout mode is active) they are sent to output 2 with metadata and the warning `Queue node dropped 2 message(s) due to timeout.` is logged. Expiry is checked when a message arrives and each time a message is due to be sent, so `queuedDuration` can be slightly longer than the timeout.
+- When messages expire due to timeout (and timeout mode is active) they are sent to output 2 with metadata and the warning `Queue node dropped 2 message(s) due to timeout.` is logged. Expiry is checked when a message arrives and each time a message is due to be sent, so `queuedDuration` can be longer than the timeout, by up to one Interval.
 - When the queue overflows (queue-size mode) excess messages are sent to output 2 with metadata and a warning.
 - On redeploy or stop, the messages still waiting are discarded; they are not sent to output 2.
 - A node saved before the Mode field existed (no `mode` in its configuration) applies both the size limit and the timeout.

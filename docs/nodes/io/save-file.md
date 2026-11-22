@@ -26,7 +26,7 @@ A raw image object has `data` (a Buffer of 8-bit pixels, row after row), `width`
 ## Outputs
 One output. After a successful save the incoming message is sent on with:
 - the result at **Result to** (`msg.savedFile` by default): `{ path, filename, type, extension, sizeBytes, format }`, where `type` is `image`, `json`, `text` or `binary`, `extension` has no dot and `format` is present for images only. In multiple mode it is an array of these objects;
-- the time taken at `msg.performance.rpimage.<name>`: `{ conversion, task, total }` in milliseconds, where `<name>` is the node name in lower case with any other character replaced by `_` (`rp_save_file` when the node has no name).
+- the time taken at `msg.performance.rpimage.<name>`: `{ conversion, task, total }` in milliseconds (`conversion` is always `0`; `task` and `total` both hold the time taken), where `<name>` is the node name in lower case with each run of other characters replaced by one `_` and any `_` at the start or end removed (`rp_save_file` when the node has no name).
 
 When the save fails, nothing is sent (see [Errors](#errors)).
 
@@ -94,7 +94,7 @@ With File Type *Auto-detect*, the first rule that applies decides:
 | **JPEG** | Lossy, configurable quality. Default format. |
 | **PNG** | Lossless, configurable compression level (0-9, default 8). |
 | **WebP** | Lossy or lossless, with quality, smart subsample, and effort options. |
-| **BMP** | Uncompressed bitmap from raw image objects. Supports 8-bit grayscale, 24-bit BGR, and 32-bit BGRA. Uses a fast raw encoder (no Sharp dependency). |
+| **BMP** | Uncompressed bitmap, from raw image objects only: an encoded image buffer saved as BMP is written as JPEG data under the `.bmp` name. Supports 8-bit grayscale, 24-bit BGR, and 32-bit BGRA. Uses a fast raw encoder (no Sharp dependency). |
 
 ## Behavior
 - All filesystem access is asynchronous, Sharp encodes on its own thread pool, and every pure-JavaScript pixel operation runs on a worker thread. JSON serialisation runs on the main thread; a JSON file of 5 MB or more logs the warning `JSON output is large (6.2 MB); this may impact the event loop and memory usage.`
@@ -136,6 +136,6 @@ In multiple mode the item errors are warnings that skip the item.
 
 ## Example Flows
 - Save final inference results as `results.json` in `/data/out`.
-- Persist camera frames as WebP by setting *File Type = image* and *Image Format = webp*.
+- Persist camera frames as WebP by setting *File Type = Image* and *Image Format = WebP*.
 - Archive arbitrary payloads by pointing *Input* to `msg.myBuffer` and enabling overwrite protection.
 - Save multiple detection crops from a single message by switching to *Multiple files* mode and pointing *Save Config* at `msg.detections`.

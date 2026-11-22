@@ -88,7 +88,7 @@ One output. The node sends a **new message** that holds only the selection, writ
 ### Error Handling
 - **Input Validation**: The input must be a non-empty array
 - **Out-of-range Indices**: In a comma list they are skipped without a warning; a single index out of range is an invalid selection
-- **No Message**: Every case below logs a warning and sends nothing
+- **No Message**: An input that is not an array, an empty array and a selection that matches nothing each log a warning and send nothing (see below)
 
 ## Selection Syntax Guide
 
