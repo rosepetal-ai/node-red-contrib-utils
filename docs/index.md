@@ -30,7 +30,7 @@ Or search `@rosepetal/node-red-contrib-utils` in the Node-RED Palette Manager.
 
 ## Requirements
 
-- Node.js >= 16 (the *Disk Limit* check of `rp-save-file` needs Node.js 18.15 or later)
+- Node.js 18.17 or later (`package.json` declares `>=16.0`, but the `sharp` version the package depends on, 0.34, needs `^18.17.0 || ^20.3.0 || >=21.0.0`)
 - Node-RED >= 1.0.0
 - `sharp` native addon (fetched via npm)
 
