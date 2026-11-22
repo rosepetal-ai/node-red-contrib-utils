@@ -32,10 +32,10 @@ The `array-in` node collects data from various sources and tags it with position
 
 ### Inputs
 - **Input Message**: Message containing data at the configured input path
-- **Dynamic Position**: Array position can be resolved from message properties
+- **Dynamic Position**: Array position can be resolved from a message property or from flow or global context
 
 ### Outputs
-The node adds metadata to the message and mirrors the extracted data into the payload only when reading from `msg.payload`. For other input paths, the existing payload remains untouched while the metadata provides access to the collected value:
+One output. The node sends the incoming message on with `msg.meta` added (created when the message has none). It copies the value into `msg.payload` only when **Input from** is `msg.payload`; for any other input the payload is left as it was and the value travels in `msg.meta.arrayData`:
 
 ```javascript
 {
@@ -59,27 +59,27 @@ The node adds metadata to the message and mirrors the extracted data into the pa
 - **Purpose**: Specifies where to extract the data to be included in the array
 
 ### Array Position
-- **Type**: Number or dynamic reference
+- **Default**: `0` (fixed number)
 - **Options**:
   - **Fixed Number**: Static position (0, 1, 2, ...)
   - **msg.***: Dynamic position from message property
   - **flow.***: Position from flow context
   - **global.***: Position from global context
-- **Range**: Non-negative integers (0-based indexing)
+- **Range**: Non-negative integers (0-based indexing). The value is read with `parseInt`, so `2.7` and `"2"` both give `2`; an empty value means `0`.
 - **Purpose**: Determines where this data appears in the final array
 
 ## Performance Notes
 
 ### Array Assembly Strategy
 - **Position Tagging**: Lightweight metadata addition with minimal processing overhead
-- **Memory Efficient**: Only stores references and position information
+- **No Copies**: `msg.meta.arrayData` holds a reference to the value, not a copy
 - **Parallel Collection**: Multiple array-in nodes can operate simultaneously
-- **Order Preservation**: Maintains correct data sequence regardless of processing timing
+- **Order Preservation**: The position, not the arrival order, decides where the value ends up in the array
 
 ### Status Display
-- **Processing Info**: Shows array position and data type
-- **Validation**: Indicates successful data extraction
-- **Error Handling**: Displays warnings for missing data or invalid positions
+- **Blue dot** `Position: 0` (or `Position: msg.index` for a dynamic position) after deploy
+- **Green dot** `Position: <n>` with the position used for the last message
+- **Red ring** `Invalid position` when the position cannot be resolved, `Error` on any other failure
 
 ## Real-World Examples
 
@@ -120,15 +120,16 @@ Dynamic array building based on conditions.
 
 ### Missing Data
 - **Issue**: Input path contains no data
-- **Result**: `meta.arrayData` set to `null`
+- **Result**: The warning `No data found at msg.payload` (with the configured path) is logged, `meta.arrayData` is set to `null` and the message is still sent
 - **Solution**: Verify data exists at specified input path before processing
 
 ### Dynamic Position Errors
-- **Issue**: Position resolves to non-integer or negative value
+- **Issue**: Position resolves to a value that is not a number, or to a negative number
+- **Result**: The warning `Failed to resolve array position: ...` is logged, the status shows `Invalid position` and the message is dropped
 - **Solution**: Validate dynamic position sources return valid array indices
 - **Check**: Use debug node to verify position values
 
 ### Array Gaps
-- **Issue**: Non-sequential positions create sparse arrays
-- **Result**: Array contains undefined elements at missing positions
-- **Solution**: Use sequential positions or handle sparse arrays in downstream nodes
+- **Issue**: Positions skip numbers, or some positions never arrive
+- **Result**: `array-out` only accepts positions `0` to *Expected Count* - 1 and completes an array only when all of them arrive. If one is missing, its timeout sends the partial array, with `null` at the missing positions, to its second output
+- **Solution**: Use sequential positions starting from 0 and set *Expected Count* in `array-out` to their number

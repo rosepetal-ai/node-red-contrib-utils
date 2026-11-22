@@ -31,13 +31,13 @@ The `queue` node buffers incoming messages, enforces a minimum interval between 
 - **Incoming Message**: Any Node-RED message to be enqueued.
 
 ### Outputs
-- **Output 1**: Messages forwarded in FIFO order while respecting the configured interval.
+- **Output 1**: Messages forwarded in FIFO order while respecting the configured interval. They are the incoming messages, unchanged.
 - **Output 2**: Messages dropped due to timeout or overflow, with metadata:
   - `msg.meta.queueDropped` - Always `true`
   - `msg.meta.queueDropReason` - Either `"timeout"` or `"overflow"`
   - `msg.meta.queuedDuration` - Time spent in queue before timeout (timeout drops only)
   - `msg.meta.queueTimeout` - Configured timeout value in ms (timeout drops only)
-  - `msg.meta.queueSize` - Queue size when overflow occurred (overflow drops only)
+  - `msg.meta.queueSize` - Number of messages waiting when overflow occurred (overflow drops only)
   - `msg.meta.queueMaxSize` - Configured max queue size (overflow drops only)
 
 ## Configuration Options
@@ -47,29 +47,44 @@ The `queue` node buffers incoming messages, enforces a minimum interval between 
 - **Default**: `Queue Size Limit`
 - **Purpose**: Select whether the node enforces a hard buffer capacity or lets messages expire after a timeout; the controls shown below change depending on the selected mode.
 
-### Queue Size Limit
+### Max Queue Size
 - **Type**: Number (integer)
 - **Default**: `0` (no limit)
-- **Purpose**: Available only in queue-size mode. Controls how many messages may be enqueued before excess messages are ignored.
+- **Purpose**: Available only in queue-size mode. Controls how many messages may wait in the queue; while it is full, each new message goes to output 2 with `queueDropReason: "overflow"` and the warning `Queue node at capacity (5). Incoming message dropped.` (for a size of 5) is logged.
 
 ### Timeout (ms)
 - **Type**: Number (integer)
 - **Default**: `0` (no timeout)
-- **Purpose**: Available only in timeout mode. Messages that stay longer than this duration are removed before they reach the output.
+- **Purpose**: Available only in timeout mode, where the queue has no size limit. Messages that stay longer than this duration are removed before they reach output 1 and sent to output 2.
 
 ### Interval (ms)
 - **Type**: Number (integer)
 - **Default**: `0` (no enforced delay)
 - **Purpose**: Minimum time that must elapse between forwarded messages. When set to 0, messages flow out as soon as they are available.
 
+Messages only wait when **Interval** is greater than 0. With an interval of 0 every message leaves as soon as it arrives, so the queue never fills and nothing expires.
+
 ## Behavior & Status
 
 - Messages are processed in first-in-first-out order.
 - The node emits messages immediately when the interval requirement has already been satisfied.
 - If necessary, the node waits the remaining interval before releasing the next message.
-- When messages expire due to timeout (and timeout mode is active) they are sent to output 2 with metadata and a warning is logged.
-- When the queue overflows (queue-size mode) excess messages are sent to output 2 with metadata.
-- Node status indicates whether the queue is idle, holding messages, or actively sending.
+- When messages expire due to timeout (and timeout mode is active) they are sent to output 2 with metadata and the warning `Queue node dropped 2 message(s) due to timeout.` is logged. Expiry is checked when a message arrives and each time a message is due to be sent, so `queuedDuration` can be slightly longer than the timeout.
+- When the queue overflows (queue-size mode) excess messages are sent to output 2 with metadata and a warning.
+- On redeploy or stop, the messages still waiting are discarded; they are not sent to output 2.
+- A node saved before the Mode field existed (no `mode` in its configuration) applies both the size limit and the timeout.
+- Node status: blue dot `Idle`, yellow dot `Queued: 3` while messages wait, green dot `Sending (remaining 2)` when one is released, red ring `Error`.
+
+## Example
+
+A camera sends frames faster than the inference stage can take them:
+
+```
+[Camera] → [Queue: Mode=Queue Size Limit, Max Queue Size=5, Interval=200] → [Inference]
+                                                              output 2 → [Debug]
+```
+
+At most one frame every 200 ms reaches the inference node. Up to 5 frames wait their turn; while 5 are waiting, new frames go to output 2 with `msg.meta.queueDropReason = "overflow"`. To keep only fresh frames instead of a fixed number, use Mode=Timeout with, for example, Timeout=1000: frames that waited 1 second or more go to output 2 with `queueDropReason = "timeout"`.
 
 ## Best Practices
 

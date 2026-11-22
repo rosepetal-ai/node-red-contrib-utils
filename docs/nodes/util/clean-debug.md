@@ -30,14 +30,14 @@ The `clean-debug` node is a drop-in replacement for the core Debug node that kee
 - **Incoming Message**: Any Node-RED message.
 
 ### Outputs
-- **No message output**: The node publishes to the debug sidebar and/or console only.
+- **No message output**: The node publishes to the debug sidebar and/or console only. It shows no status.
 
 ## Configuration Options
 
 ### Output
-- **Type**: Typed input (msg/flow/global/env/jsonata/etc.)
+- **Type**: Typed input: `msg`, `flow`, `global`, string, number, boolean, JSON, buffer, timestamp, JSONata, environment variable, or *complete msg object*
 - **Default**: `msg.payload`
-- **Purpose**: Selects the value to display. Choose the full message object if needed.
+- **Purpose**: Selects the value to display. Choose *complete msg object* to see the whole message.
 
 ### Send to debug sidebar
 - **Type**: Boolean
@@ -47,21 +47,40 @@ The `clean-debug` node is a drop-in replacement for the core Debug node that kee
 ### Also log to console
 - **Type**: Boolean
 - **Default**: Disabled
-- **Purpose**: Logs the value to the Node-RED runtime log.
+- **Purpose**: Logs the value to the Node-RED runtime log, at info level, formatted with `util.inspect` (5 levels deep, 10 array items). With cleaning on it logs the cleaned value, with cleaning off the original one.
 
 ### Clean heavy payloads
 - **Type**: Boolean
 - **Default**: Enabled
-- **Purpose**: Replaces large buffers, typed arrays, data URLs, and long base64 strings with short placeholders.
+- **Purpose**: Replaces buffers, typed arrays, data URLs, and long base64 strings with short placeholders (see [Cleaning Rules](#cleaning-rules)). The node label reads `debug` instead of `clean debug` when it is off.
 
 ### Enabled
 - **Type**: Boolean (button toggle)
-- **Purpose**: Temporarily disable the node without removing it from the flow.
+- **Default**: Enabled
+- **Purpose**: Temporarily disable the node without removing it from the flow. The button takes effect at once, through the runtime admin endpoint `POST /rp-clean-debug/<node id>` (body `{ "active": true }` or `false`; it needs the `flows.write` permission). The flow is marked as changed: deploy to keep the new state after a restart.
+
+## Cleaning Rules
+
+With **Clean heavy payloads** on:
+
+| Value | Shown as |
+|-------|----------|
+| Buffer, of any size (also the serialised form `{ type: "Buffer", data: [...] }`) | `[Buffer withheld: 5242880 bytes]` |
+| Typed array or `ArrayBuffer` | `[Uint8Array withheld: 1024 items]`, with the type of the array |
+| String starting with `data:image/` | `[DataImage withheld: 81234 chars]` |
+| String of 512 characters or more, length a multiple of 4, that looks like base64 | `[Base64 withheld: 65536 chars]` |
+| Other string longer than 2048 characters | The first 2048 characters and `… [truncated N chars]` |
+| Array longer than 50 items | The first 50 items and `… N more items` |
+| Object with more than 60 keys | The first 60 keys and `__cleanDebugNote: "N more keys not shown"` |
+| Anything nested deeper than 6 levels | `[Array(N)]` or `[Object with N keys]` |
+| Circular reference | `[Circular ~path]` |
+
+With it off the value is still bounded, with wider limits: 100 array items, 120 keys, 6 levels, strings and buffer previews cut at the `debugMaxLength` of the Node-RED settings (1000 by default; buffer previews show at least 512 bytes).
 
 ## Behavior Notes
 
-- Cleaning only affects what is displayed; the original message is not modified.
-- When cleaning is disabled, the node behaves like the standard Debug node.
+- Cleaning only affects what is displayed; the original message is not modified, and it is not cloned.
+- When cleaning is disabled, buffers are shown with a preview of their first bytes, and the wider limits above still apply.
 - Large arrays/objects are truncated for safety; circular references are handled gracefully.
 
 ## Example
@@ -70,4 +89,4 @@ The `clean-debug` node is a drop-in replacement for the core Debug node that kee
 [Image-In] -> [clean-debug: Output=msg.payload, Clean=on]
 ```
 
-Use clean mode to inspect image payloads without dumping full binary data.
+Use clean mode to inspect image payloads without dumping full binary data. A raw 1920x1080 RGB image then shows as `{ data: "[Buffer withheld: 6220800 bytes]", width: 1920, height: 1080, ... }`.

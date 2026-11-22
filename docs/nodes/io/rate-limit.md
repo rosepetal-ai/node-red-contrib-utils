@@ -34,7 +34,7 @@ The `rate-limit` node enforces a minimum interval between output messages based 
 - **Output 1 (passed)**: Messages that meet or exceed the minimum interval since the last accepted message. The first message always passes.
 - **Output 2 (throttled)**: Messages that arrived sooner than the configured interval since the last accepted message.
 
-Both outputs receive timing data at the configured output path (when set).
+Both outputs send the incoming message itself, with the timing data written to the configured output path (when set; with `flow` or `global` the timing data goes to the context instead of the message).
 
 ### Timing Data
 ```javascript
@@ -50,17 +50,17 @@ Both outputs receive timing data at the configured output path (when set).
 ### Timestamp
 - **Type**: Typed input (`msg` | `flow` | `global`)
 - **Default**: `msg.timestamp`
-- **Purpose**: Path to the external timestamp value. Accepts ISO 8601 strings, epoch milliseconds, or Date objects.
+- **Purpose**: Path to the external timestamp value. Accepts ISO 8601 strings, epoch milliseconds, or Date objects. A number is used as is, in milliseconds; any other value goes through `new Date(value)`, so epoch milliseconds must be a number, not a string (`"1700000000000"` is an invalid timestamp).
 
 ### Interval (ms)
 - **Type**: Typed input (`num` | `msg` | `flow` | `global`)
 - **Default**: `250`
-- **Purpose**: Minimum milliseconds between passed messages. Messages arriving sooner are sent to the throttled output.
+- **Purpose**: Minimum milliseconds between passed messages. Messages arriving sooner are sent to the throttled output. Must be `0` or more; `0` passes every message.
 
 ### Window (ms)
 - **Type**: Typed input (`num` | `msg` | `flow` | `global`)
 - **Default**: `5000`
-- **Purpose**: Rolling time window for average cadence calculation. Messages older than this are dropped from the history.
+- **Purpose**: Rolling time window for average cadence calculation. Messages older than this are dropped from the history. Must be greater than `0`.
 
 ### Output to
 - **Type**: Typed input (`msg` | `flow` | `global`)
@@ -73,16 +73,17 @@ Both outputs receive timing data at the configured output path (when set).
 - Subsequent messages pass only if the external timestamp difference from the last *accepted* message meets or exceeds the interval.
 - All messages (passed and throttled) are added to the rolling window history for cadence calculation.
 - The rolling window is pruned on each message to remove entries older than the window size.
-- Invalid timestamps cause the message to be dropped with a warning.
-- Invalid interval or window values cause the message to be dropped with a warning.
+- Invalid timestamps cause the message to be dropped with the warning `Invalid timestamp: ...`.
+- Invalid interval or window values cause the message to be dropped with the warning `Invalid interval value: ...` or `Invalid window size: ...`.
 - Interval and window size can be set dynamically per-message when using `msg`, `flow`, or `global` types.
+- If the timestamps go backwards (for example, the source restarts its clock), every message is throttled until a timestamp reaches the last accepted one plus the interval. Redeploying the node clears its state.
 
 ## Status
 
-- **Blue dot** -- Idle, no messages received yet.
-- **Green dot** -- Last message passed. Shows time since previous and rolling average.
-- **Yellow dot** -- Last message was throttled. Shows the interval comparison.
-- **Red ring** -- Error (invalid timestamp, interval, or window value).
+- **Blue dot** `Idle` -- No messages received yet.
+- **Green dot** `Pass: 104ms (avg 98ms)` -- Last message passed. Shows time since previous and rolling average (`Pass: first (avg 0ms)` for the first message).
+- **Yellow dot** `Throttled: 40ms < 100ms` -- Last message was throttled. Shows the interval comparison.
+- **Red ring** `Invalid timestamp`, `Invalid interval`, `Invalid window` or `Error`.
 
 ## Example Flows
 
