@@ -17,7 +17,7 @@ npm install @rosepetal/node-red-contrib-utils
 
 ## Requirements
 
-- Node.js >= 16
+- Node.js >= 18.17 (required by `sharp` 0.34)
 - Node-RED >= 1.0.0
 - `sharp` native addon (fetched via npm; builds from source if no prebuilt is available)
 

@@ -110,7 +110,7 @@ With File Type *Auto-detect*, the first rule that applies decides:
 - Context reads and writes (`flow` / `global`) use Node-RED's asynchronous context API, so asynchronous context stores are supported.
 - JSON inputs are pretty-printed with JSON Indent; a string that is already valid JSON is written as is.
 - Text mode writes the value as a string (`null` or `undefined` give an empty file). Binary mode writes a Buffer as is, the Buffer in `value.data` when there is one, a string as UTF-8, and anything else as JSON text.
-- Disk usage is checked before each write; the save fails when usage reaches the configured *Disk Limit* (default 90%, 0 disables the check). The check uses `fs.statfs`, available from Node.js 18.15: on older versions the node logs the warning `Disk usage check failed for "<folder>": ...` once and saves without the check.
+- Disk usage is checked before each write; the save fails when usage reaches the configured *Disk Limit* (default 90%, 0 disables the check). If the check itself fails, the node logs the warning `Disk usage check failed for "<folder>": ...` once and saves without it.
 
 ## Errors
 
