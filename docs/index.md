@@ -17,6 +17,8 @@ head:
 
 `@rosepetal/node-red-contrib-utils` provides 9 utility nodes for array assembly, message queueing, rate limiting, file saving, promise aggregation, safe debugging, and event loop monitoring.
 
+![Array-Out Demo](../assets/nodes/io/array-out-demo.gif)
+
 ## Installation
 
 ```bash
@@ -28,7 +30,7 @@ Or search `@rosepetal/node-red-contrib-utils` in the Node-RED Palette Manager.
 
 ## Requirements
 
-- Node.js >= 16
+- Node.js 18.17 or later (`package.json` declares `>=16.0`, but the `sharp` version the package depends on, 0.34, needs `^18.17.0 || ^20.3.0 || >=21.0.0`)
 - Node-RED >= 1.0.0
 - `sharp` native addon (fetched via npm)
 
@@ -59,3 +61,13 @@ All node types are prefixed with `rp-` and appear under the **RP Utils** categor
 |------|---------|
 | **[rp-clean-debug](./nodes/util/clean-debug.md)** | Debug output that sanitizes large payloads to keep the sidebar responsive |
 | **[rp-block-detect](./nodes/util/block-detect.md)** | Event loop delay watchdog with live status and log warnings |
+
+## Non-blocking by design
+
+The nodes keep heavy work off the Node-RED event loop:
+
+- Filesystem access uses `fs.promises` and streams.
+- Image encoding runs on Sharp's thread pool. Pixel work written in JavaScript (BGR/RGB reordering, raw BMP and PNG encoding) runs on a small worker-thread pool: one worker kept warm, up to `min(4, cores - 1)`, or the number set in the `RP_CPU_WORKERS` environment variable. See [rp-save-file](./nodes/io/save-file.md#behavior).
+- `flow` / `global` context is read and written through Node-RED's asynchronous context API, so asynchronous context stores are supported.
+- Debug sanitisation is bounded (depth, key, array and string-sample limits) and never deep-clones the message. See [rp-clean-debug](./nodes/util/clean-debug.md).
+- [rp-block-detect](./nodes/util/block-detect.md) watches the event loop and logs a warning when something blocks it.

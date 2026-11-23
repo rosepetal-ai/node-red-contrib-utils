@@ -17,7 +17,7 @@ npm install @rosepetal/node-red-contrib-utils
 
 ## Requirements
 
-- Node.js >= 16
+- Node.js >= 18.17 (required by `sharp` 0.34)
 - Node-RED >= 1.0.0
 - `sharp` native addon (fetched via npm; builds from source if no prebuilt is available)
 
@@ -36,6 +36,7 @@ All node types are prefixed with `rp-` to avoid collisions with other packages. 
 | **[rp-array-select](docs/nodes/io/array-select.md)** | Select array elements using index and slice syntax. |
 | **[rp-queue](docs/nodes/io/queue.md)** | Buffer messages, enforce output intervals, and drop stale or overflow items. |
 | **[rp-save-file](docs/nodes/io/save-file.md)** | Save payloads to disk as image, JSON, text, or binary with auto-detection. |
+| **[rp-rate-limit](docs/nodes/io/rate-limit.md)** | Enforce a minimum interval between outputs based on external timestamps. |
 
 ### Async and Workflow
 

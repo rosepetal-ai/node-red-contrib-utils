@@ -35,6 +35,8 @@ The `array-select` node provides powerful array element selection with Python-li
 - **Selection String**: Pattern specifying which elements to extract
 
 ### Outputs
+One output. The node sends a **new message** that holds only the selection, written to **Output to** (`msg.payload` by default). Other properties of the incoming message (`topic`, `meta`, ...) are not copied. With `flow` or `global` as **Output to**, the selection goes to the context and the message sent carries nothing else.
+
 - **Single Element**: Direct element output (unless Force Array enabled)
 - **Multiple Elements**: Always output as array
 - **Invalid Selection**: No message sent, warning logged
@@ -47,35 +49,46 @@ The `array-select` node provides powerful array element selection with Python-li
   - `msg.*` - Read from message property
   - `flow.*` - Read from flow context
   - `global.*` - Read from global context
-- **Validation**: Input must be an array
+- **Validation**: Input must be a non-empty array
+
+### Output To
+- **Default**: `msg.payload`
+- **Options**: `msg.*`, `flow.*` or `global.*`
+- **Purpose**: Where the selected element or elements are written
 
 ### Selection Pattern
+- **Editor label**: Selection
 - **Type**: String with flexible syntax
+- **Default**: `0`
 - **Formats**:
   - **Single Index**: `0`, `2`, `-1`
   - **Multiple Indices**: `1,3,5` (comma-separated)
   - **Range**: `1:4` (slice from index 1 to 3)
   - **Step Pattern**: `0::2` (every 2nd element)
   - **Negative Indexing**: `-1` (last), `-2:` (last two)
+- **Differences from Python**: an empty or `0` end means "to the end" (`2:0` is the same as `2:`), a step that is empty, `0` or negative is `1` (no reverse order), and commas and colons cannot be combined (`0,2:4` reads indices `0` and `2`)
 
 ### Force Array
 - **Type**: Boolean checkbox
 - **Default**: false
-- **Behavior**: When enabled, single elements output as arrays
+- **Behavior**: When enabled, single elements output as arrays. Without it, a selection that keeps only one element (for example `1,7` on a five-element array) is sent as that element, not as an array
 - **Use Case**: Ensure consistent array output format
 
 ## Performance Notes
 
 ### Selection Efficiency
-- **Minimal Memory Copy**: Efficient element extraction without full array duplication
-- **Index Validation**: Fast bounds checking with graceful error handling
-- **Pattern Parsing**: Optimized pattern recognition and processing
-- **Status Display**: Real-time selection information and processing state
+- **Minimal Memory Copy**: The output holds references to the selected elements; they are not copied
+
+### Status Display
+- **Blue dot** `Ready: 0,2` with the configured selection
+- **Green dot** `Selected 2 from [5]` after a message; back to `Ready` after 2 seconds
+- **Red ring** `Invalid input: not an array`, `Invalid selection` or `Error`
+- **Yellow ring** `Empty array`
 
 ### Error Handling
-- **Input Validation**: Comprehensive array and pattern validation
-- **Graceful Degradation**: Invalid indices skipped with warnings
-- **Bounds Checking**: Out-of-range indices handled safely
+- **Input Validation**: The input must be a non-empty array
+- **Out-of-range Indices**: In a comma list they are skipped without a warning; a single index out of range is an invalid selection
+- **No Message**: An input that is not an array, an empty array and a selection that matches nothing each log a warning and send nothing (see below)
 
 ## Selection Syntax Guide
 
@@ -153,8 +166,12 @@ Get the last 5 processed items.
 
 ### Invalid Input Type
 - **Issue**: Input is not an array
-- **Result**: Warning logged, message not sent
+- **Result**: Warning `Input must be an array. Received: object` (with the type received), message not sent
 - **Solution**: Verify input is array type, use array-out to create arrays
+
+### Empty Input Array
+- **Issue**: Input is `[]`
+- **Result**: Warning `Input array is empty`, message not sent
 
 ### Out of Bounds Indices
 - **Issue**: Selection indices exceed array length
@@ -163,10 +180,10 @@ Get the last 5 processed items.
 
 ### Empty Selection Results
 - **Issue**: Selection pattern matches no elements
-- **Result**: Empty array `[]` output
+- **Result**: Warning `Invalid selection "7" for array of length 5`, message not sent (an empty array is never sent)
 - **Common Cause**: Range beyond array bounds
 
 ### Syntax Errors
 - **Issue**: Invalid selection pattern syntax
-- **Result**: Warning logged, message not sent
+- **Result**: Same warning as an empty selection, message not sent
 - **Solution**: Verify pattern follows documented syntax

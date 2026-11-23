@@ -45,14 +45,23 @@ Messages from `array-in` nodes containing:
 
 **Data Extraction Priority**: The node prefers `msg.meta.arrayData` but falls back to `msg.payload` if arrayData is undefined.
 
+**Accepted positions**: `0` to *Expected Count* - 1. A message without a numeric `msg.meta.arrayPosition` is ignored with the warning `Message missing array metadata. Expected msg.meta.arrayPosition (number) from rp-array-in node`; a position outside the range is ignored with the warning `Position 5 out of range 0‑2` (for an Expected Count of 3).
+
 ### Outputs
 
 #### Output 1 - Complete Array (Success)
+Sent when the last missing position arrives. The message is a shallow copy of that last message, with the ordered array written to **Output to** (`msg.payload` by default); its other properties, `meta` included, are those of the last message:
+
 ```javascript
-[data0, data1, data2, ...]  // Ordered array of collected data
+{
+  ...lastMessage,
+  payload: [data0, data1, data2, ...]  // Ordered array of collected data
+}
 ```
 
 #### Output 2 - Timeout Data (Error)
+Sent when **Timeout** expires first. It is a new message: it carries only `meta` and the partial array, with `null` at the missing positions. No property of the collected messages is copied into it.
+
 ```javascript
 {
   [outputPath]: [data0, null, data2, ...],  // Partial array in configured location
@@ -71,25 +80,26 @@ Messages from `array-in` nodes containing:
 
 ### Expected Count
 - **Type**: Number (required)
-- **Range**: Minimum 1
+- **Default**: `2`
+- **Range**: Minimum 1. The value is read with `parseInt` (`2.5` gives `2`); a value that gives no integer of 1 or more logs the error `Invalid expectedCount. Must be a positive integer.` at deploy and the node uses `2`
 - **Purpose**: Number of array elements required before output
-- **Validation**: Must match the number of connected array-in nodes
-- **Impact**: Array assembly completes when this many elements are collected
+- **Validation**: Should equal the number of positions sent by the connected array-in nodes (`0` to Expected Count - 1); the node does not check the wiring
+- **Impact**: Array assembly completes when this many different positions are collected
 
 ### Timeout
 - **Type**: Number (milliseconds)
 - **Default**: 5000ms (5 seconds)
-- **Range**: Minimum 100ms
-- **Purpose**: Maximum wait time for all elements after first message
+- **Range**: The editor field has a minimum of 100ms; an empty or `0` value means 5000ms
+- **Purpose**: Maximum wait time for all elements after first message. The timer starts with the first message of a set and is not restarted by the following ones
 - **Behavior**: Sends partial data to output 2 on timeout
 
-### Output Location
+### Output to
 - **Default**: `msg.payload`
 - **Options**:
   - `msg.*` - Store in message property
   - `flow.*` - Store in flow context
   - `global.*` - Store in global context
-- **Purpose**: Where to store the assembled array
+- **Purpose**: Where to store the assembled array. With `flow` or `global` the array goes to the context and the message sent on output 1 is the last message unchanged; on output 2 it carries only `meta`
 
 ## Performance Notes
 
@@ -100,9 +110,11 @@ Messages from `array-in` nodes containing:
 - **State Reset**: Automatic cleanup between collection cycles
 
 ### Status Display
-- **Collection Progress**: Shows number of items collected vs expected
-- **Success Timing**: Displays total assembly time on completion
-- **Timeout Warning**: Indicates when timeout occurs with diagnostic info
+- **Ready**: Blue dot `Ready (expect 3)` while waiting for the first message of a set
+- **Collection Progress**: Yellow dot `Collecting… (2/3)`
+- **Success Timing**: Green dot `Complete: 3 (12 ms)`, with the time since the first message of the set; back to `Ready` after 2 seconds
+- **Timeout Warning**: Yellow ring `Timeout: sent 2/3 to output 2`; back to `Ready` after 3 seconds
+- **Error**: Red ring `Error`; the set being collected is discarded
 
 ## Real-World Examples
 
@@ -134,7 +146,7 @@ Merge results from parallel processing pipelines.
 ### Quality Control Assembly
 ```
 [Inspection A] → [Array-In: pos=0] ┐
-[Inspection B] → [Array-In: pos=1] ├→ [Array-Out: timeout=10000] → [Final Report]
+[Inspection B] → [Array-In: pos=1] ├→ [Array-Out: count=3, timeout=10000] → [Final Report]
 [Inspection C] → [Array-In: pos=2] ┘
 ```
 Collect quality control results with extended timeout.
@@ -151,15 +163,15 @@ Collect quality control results with extended timeout.
 
 ### Count Mismatch
 - **Issue**: Expected count doesn't match number of array-in nodes
-- **Result**: Perpetual waiting or premature completion
+- **Result**: If it is higher, every set ends in a timeout on output 2. If it is lower, the positions at or above Expected Count are ignored with a warning and the array is shorter than intended
 - **Solution**: Verify expected count equals number of connected array-in nodes
 
 ### Position Conflicts
 - **Issue**: Multiple array-in nodes using same position
-- **Result**: Data overwrites, array count confusion
+- **Result**: The later message replaces the earlier one and the position is counted once, so the set waits for a position that never comes and ends in a timeout
 - **Solution**: Ensure each array-in node has unique position
 
 ### Missing Metadata
 - **Issue**: Messages arriving without proper meta.arrayPosition
-- **Result**: Messages ignored, incomplete arrays
+- **Result**: Messages ignored with a warning, incomplete arrays
 - **Solution**: Verify all input messages come from array-in nodes

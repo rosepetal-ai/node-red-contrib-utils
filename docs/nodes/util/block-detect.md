@@ -27,35 +27,47 @@ The `block-detect` node gives you a lightweight watchdog that keeps an eye on No
 
 ## How It Works
 
-- The node samples the Node.js [`monitorEventLoopDelay`](https://nodejs.org/api/perf_hooks.html#perf_hooks_monitor_event_loop_delay_options) histogram every *N* milliseconds (default one second).
-- When the measured delay exceeds the configured threshold for a number of consecutive samples, the node writes an alert to the runtime log (`warn`, `error`, or plain `log`) and changes its editor status to red.
-- If `monitorEventLoopDelay` is unavailable (very old Node.js builds), it falls back to measuring timer drift, which still provides a useful signal with minimal CPU overhead.
+- The node samples the Node.js [`monitorEventLoopDelay`](https://nodejs.org/api/perf_hooks.html#perf_hooks_monitor_event_loop_delay_options) histogram every *N* milliseconds (default one second). Each sample reads the maximum, mean and minimum delay recorded since the previous sample, then resets the histogram.
+- When the maximum delay reaches the configured threshold for a number of consecutive samples, the node writes a warning to the runtime log.
+- If `monitorEventLoopDelay` is unavailable, it logs `monitorEventLoopDelay not available; falling back to coarse timer drift detection.` and measures how late its own timer fires instead.
 - A cooldown timer prevents log flooding when the system stays blocked for longer periods.
 
 ## Configuration
 
 | Option | Description |
 |--------|-------------|
-| **Threshold (ms)** | Maximum acceptable event loop delay. Samples above this value count as "blocking". Default: `120 ms`. |
-| **Sample interval (ms)** | How often to collect a measurement. Smaller values react faster but use slightly more CPU. Default: `1000 ms`. |
-| **Consecutive hits** | Number of back-to-back samples that must exceed the threshold before an alert fires. Helps filter out one-off spikes. Default: `1`. |
-| **Cooldown (ms)** | Minimum time between alerts so your logs do not get spammed while a problem persists. Default: `30,000 ms`. |
+| **Threshold (ms)** | Maximum acceptable event loop delay. Samples whose maximum delay reaches this value count as "blocking". Default: `120 ms`, minimum `1`. |
+| **Sample interval (ms)** | How often to collect a measurement. Smaller values react faster but use slightly more CPU. Default: `1000 ms`, minimum `100`. |
+| **Consecutive hits** | Number of back-to-back samples that must reach the threshold before an alert fires. Helps filter out one-off spikes. Default: `1`, minimum `1`. |
+| **Cooldown (ms)** | Minimum time between alerts so your logs do not get spammed while a problem persists. Default: `30,000 ms`, minimum `1000`. |
 | **Show live delay metrics** | When enabled (default) the node's status displays the latest average and max delay so you can watch it in real time. |
 
 The node has no inputs or outputs and can sit anywhere in your flow.
 
 > The watchdog internally samples `monitorEventLoopDelay` with a medium (20&nbsp;ms) resolution, which provides enough fidelity for alerts while keeping CPU overhead negligible.
 
-Alerts are always emitted with `node.warn(...)` so they appear in the standard Node-RED log without additional configuration.
+Alerts are always emitted with `node.warn(...)` so they appear in the standard Node-RED log (and the debug sidebar) without additional configuration:
+
+```
+Detected potential blocking: max 312.5 ms (avg 48.2 ms, min 20.1 ms, threshold 120 ms).
+```
+
+When Consecutive hits is reached during the cooldown, no warning is written and the count starts again.
 
 ## Interpreting the Status
 
-- **Green dot** &mdash; Event loop delay is within the safe range.
-- **Yellow ring** &mdash; Recent samples exceeded the threshold but not enough to trigger an alert yet.
-- **Red dot** &mdash; Blocking detected. Check the runtime log for details about the max/avg delay.
+The status follows the last sample only; Consecutive hits and Cooldown apply to the log warning, not to the status.
+
+- **Grey ring** `monitoring…` &mdash; Until the first sample.
+- **Green dot** &mdash; Event loop delay is within the safe range: `avg 20.3ms | max 21.4ms` with *Show live delay metrics* on, `ok` with it off.
+- **Red ring** `avg 48.2ms | max 312.5ms` (metrics on) or **red dot** `blocking detected` (metrics off) &mdash; The last sample reached the threshold. Check the runtime log for the alerts.
+
+## Example
+
+To be told about sustained blocking, not single spikes: Threshold `200`, Sample interval `1000`, Consecutive hits `3`, Cooldown `60000`. The node warns when three samples in a row (about three seconds) each saw a delay of 200 ms or more, and at most once a minute while that lasts.
 
 ## Tips
 
-- Run multiple watchdogs with different thresholds (for example *warn at 120&nbsp;ms*, *error at 500&nbsp;ms*) if you want layered alerting.
+- Run multiple watchdogs with different thresholds (for example *120&nbsp;ms* and *500&nbsp;ms*) if you want layered alerting.
 - Pair the node with system level monitoring (CPU, memory) to quickly confirm whether the blocking originated from Node-RED or external processes.
 - Because the watchdog is passive and does not emit messages, it is safe to leave it deployed permanently even in large workspaces.
